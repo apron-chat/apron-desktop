@@ -74,7 +74,7 @@ class ModelTests(unittest.TestCase):
             self.assertEqual(s.unread['general'], 4)
 
     def test_safe_url(self):
-        for url in ['https://example.com', 'ws://example.com', 'wss://user:secret@example.com', 'wss://example.com?token=x']:
+        for url in ['https://example.com', 'ws://example.com', 'wss://user:secret@example.com', 'wss://example.com?token=x', 'wss://example.com:bad', 'wss://bad host/ws']:
             with self.assertRaises(ValueError): validate_url(url)
         self.assertEqual(validate_url('ws://127.0.0.1:18765'), 'ws://127.0.0.1:18765')
         self.assertEqual(validate_url('wss://example.com/ws'), 'wss://example.com/ws')

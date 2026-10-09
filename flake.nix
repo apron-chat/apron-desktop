@@ -14,7 +14,7 @@
         build-system = [ pkgs.python3Packages.setuptools ];
         dependencies = with pkgs.python3Packages; [ pygobject3 markdown-it-py ];
         nativeBuildInputs = [ pkgs.wrapGAppsHook4 pkgs.gobject-introspection ];
-        buildInputs = [ pkgs.gtk4 pkgs.libadwaita pkgs.libsoup_3 ];
+        buildInputs = [ pkgs.gtk4 pkgs.libadwaita pkgs.libsoup_3 pkgs.libsecret ];
         dontWrapGApps = true;
         preFixup = ''makeWrapperArgs+=( "''${gappsWrapperArgs[@]}" )'';
         postInstall = ''
@@ -39,7 +39,7 @@
             inputsFrom = [ self.packages.${system}.default ];
             packages = [ (pkgs.python3.withPackages (p: [ p.pygobject3 p.markdown-it-py p.websockets p.setuptools ])) pkgs.weston pkgs.grim ];
             shellHook = ''
-              export GI_TYPELIB_PATH="${pkgs.gtk4}/lib/girepository-1.0:${pkgs.libadwaita}/lib/girepository-1.0:${pkgs.libsoup_3}/lib/girepository-1.0:$GI_TYPELIB_PATH"
+              export GI_TYPELIB_PATH="${pkgs.gtk4}/lib/girepository-1.0:${pkgs.libadwaita}/lib/girepository-1.0:${pkgs.libsoup_3}/lib/girepository-1.0:${pkgs.libsecret}/lib/girepository-1.0:$GI_TYPELIB_PATH"
             '';
           };
         });

@@ -10,6 +10,9 @@ from gi.repository import Gtk, Adw, Gio, GLib, Gdk, Pango
 from .model import PAGE_SIZE, safe_text, number
 from .session import Session
 from .render import markdown, embed_text
+from .preferences import Preferences
+from .keyring import Keyring
+from .ui_actions import DailyActions
 
 
 def box(vertical=False, spacing=8, margin=0):
@@ -41,12 +44,19 @@ def clear(container):
         container.remove(child)
 
 
-class Window(Adw.ApplicationWindow):
+class Window(DailyActions, Adw.ApplicationWindow):
     def __init__(self, app, options):
         super().__init__(application=app, title='Apron', default_width=1120, default_height=800)
         self.options = options
+        self.preferences = Preferences()
+        self.keyring = Keyring()
+        self.apply_theme()
+        self.reaction_pending = set()
+        self.keyring_jobs = {}
+        self.keyring_busy = False
         self.session = Session(self.queue_render)
         self.session.on_ready = self.ready
+        self.session.on_token = self.save_secure_session
         self.session.on_message = self.incoming
         self.room_id = ''
         self.cursor = None
@@ -66,6 +76,7 @@ class Window(Adw.ApplicationWindow):
         self.connect('notify::is-active', lambda *_: self.read_visible())
         breakpoint = Adw.Breakpoint.new(Adw.BreakpointCondition.parse('max-width: 760px'))
         breakpoint.add_setter(self.split, 'collapsed', True)
+        breakpoint.add_setter(self.thread_button, 'visible', False)
         self.add_breakpoint(breakpoint)
         self.split.bind_property('collapsed', self.nav, 'visible', 2)
         self.present()
@@ -110,6 +121,11 @@ class Window(Adw.ApplicationWindow):
         self.status = label('Disconnected', 'connection')
         bottom.append(self.identity); bottom.append(self.status)
         bottom.append(button('Connection settings', self.connect_dialog))
+        self.profile_button = button('Profile', self.profile_dialog)
+        bottom.append(self.profile_button)
+        bottom.append(button('Preferences', self.preferences_dialog))
+        self.create_room_button = button('Create a room', self.room_editor)
+        bottom.append(self.create_room_button)
         sidebar.append(bottom)
         self.split.set_sidebar(sidebar)
 
@@ -120,9 +136,18 @@ class Window(Adw.ApplicationWindow):
         self.nav.set_tooltip_text('Show rooms')
         header.pack_start(self.nav)
         self.title_label = label('Welcome to Apron', 'room-title')
+        self.title_label.set_ellipsize(Pango.EllipsizeMode.END)
+        self.title_label.set_max_width_chars(22)
         header.set_title_widget(self.title_label)
         self.thread_button = button('New thread', self.new_thread)
         header.pack_end(self.thread_button)
+        self.details_button = button('Room', self.room_details)
+        self.details_button.set_tooltip_text('Room details, members, and management')
+        header.pack_end(self.details_button)
+        header.pack_start(button('Find', self.search_messages))
+        shortcuts = button('?', self.shortcuts_dialog)
+        shortcuts.set_tooltip_text('Keyboard shortcuts')
+        header.pack_start(shortcuts)
         content.append(header)
         self.banner = Adw.Banner(title='Connect to your server to begin.')
         content.append(self.banner)
@@ -182,6 +207,15 @@ class Window(Adw.ApplicationWindow):
 
     def key_pressed(self, _, key, code, state):
         ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
+        alt = bool(state & Gdk.ModifierType.ALT_MASK)
+        if ctrl and key == Gdk.KEY_f:
+            self.search_messages(); return True
+        if alt and key == Gdk.KEY_n:
+            self.next_unread(); return True
+        if alt and key == Gdk.KEY_Up:
+            parent = self.session.store.rooms.get(self.room_id, {}).get('parent_room_id')
+            if parent: self.select_room(parent)
+            return True
         if ctrl and key == Gdk.KEY_Return:
             self.send(); return True
         if ctrl and key == Gdk.KEY_k:
@@ -207,6 +241,9 @@ class Window(Adw.ApplicationWindow):
         self.subtitle.set_text(safe_text(room.get('description') or ('Thread' if room.get('parent_room_id') else 'Room conversation')))
         self.banner.set_title(safe_text(s.error or ('' if s.ready else s.state + ' · Messages are read-only until connected.')))
         self.banner.set_revealed(bool(s.error or not s.ready))
+        self.profile_button.set_sensitive(s.ready)
+        self.create_room_button.set_sensitive(s.ready and 'rooms' in s.caps)
+        self.details_button.set_sensitive(s.ready and bool(self.room_id))
         self.thread_button.set_sensitive(s.ready and 'rooms' in s.caps and bool(self.room_id))
         self.join.set_visible(s.ready and 'rooms' in s.caps and bool(self.room_id) and not room.get('_joined'))
         self.old_button.set_sensitive(s.ready and self.cursor is not None and not self.loading)
@@ -259,7 +296,7 @@ class Window(Adw.ApplicationWindow):
     def render_messages(self):
         messages = self.visible_messages()
         # A loading-state transition must not rebuild an unchanged nonempty page.
-        signature = repr((messages, self.session.store.users, self.room_id, self.loading if not messages else False))
+        signature = repr((messages, self.session.store.users, self.session.store.reactions, self.session.ready, self.session.caps, self.room_id, self.loading if not messages else False))
         if signature == self.message_signature:
             return
         self.message_signature = signature
@@ -292,7 +329,9 @@ class Window(Adw.ApplicationWindow):
         if self.session.store.you.get('user_id') in msg.get('body', {}).get('mentions', []):
             card.add_css_class('mentioned')
         top = box()
-        top.append(label(name, 'author'))
+        author = label(name, 'author')
+        author.set_ellipsize(Pango.EllipsizeMode.END); author.set_max_width_chars(18)
+        top.append(author)
         user_label = label('@' + uid, 'metadata')
         user_label.set_hexpand(True); user_label.set_ellipsize(Pango.EllipsizeMode.END)
         top.append(user_label)
@@ -306,6 +345,7 @@ class Window(Adw.ApplicationWindow):
             reply.add_css_class('reply-button')
             reply.set_tooltip_text('Reply to ' + name)
             top.append(reply)
+        top.append(self.message_menu(msg))
         card.append(top)
         target = msg.get('reply_to', {})
         if target.get('message_id'):
@@ -324,6 +364,13 @@ class Window(Adw.ApplicationWindow):
         card.append(text)
         for embed in body.get('embeds', [])[:12]:
             card.append(label('▧ ' + embed_text(embed), 'dim-label', True))
+        if not msg.get('deleted') and 'reactions' in self.session.caps:
+            reactions = box()
+            for emoji, count in self.session.store.reaction_counts(msg['message_id']).items():
+                reactions.append(button(safe_text(emoji) + ' ' + str(count), lambda e=emoji: self.toggle_reaction(msg, e), 'flat'))
+            add = button('React', lambda: self.reaction_dialog(msg), 'flat')
+            add.set_sensitive(self.session.ready)
+            reactions.append(add); card.append(reactions)
         outer.append(card)
         return outer
 
@@ -337,7 +384,17 @@ class Window(Adw.ApplicationWindow):
     def incoming(self, msg):
         if not self.room_id:
             self.room_id = msg['room_id']
+        if self.preferences.data.get('notifications') and self.session.ready and not self.is_active() and msg.get('message_id') == msg.get('log_id') and self.session.store.you.get('user_id') in msg.get('body', {}).get('mentions', []):
+            notice = Gio.Notification.new('New Apron mention')
+            notice.set_body('Mention in ' + safe_text(self.session.store.rooms.get(msg['room_id'], {}).get('title') or msg['room_id'], 120))
+            notice.set_default_action_and_target('app.open-room', GLib.Variant('s', msg['room_id']))
+            self.get_application().send_notification(self.notification_id(msg['room_id']), notice)
         self.queue_render()
+
+    @staticmethod
+    def notification_id(rid):
+        import hashlib
+        return 'room-' + hashlib.sha256(rid.encode()).hexdigest()[:24]
 
     def activate_room(self, _, row):
         self.select_room(row.rid)
@@ -411,6 +468,8 @@ class Window(Adw.ApplicationWindow):
             store = self.session.store
             if store.reads.get(self.room_id, 0) < number(mid):
                 store.mark_read(self.room_id, mid)
+                if self.preferences.data.get('notifications'):
+                    self.get_application().withdraw_notification(self.notification_id(self.room_id))
                 if 'activity' in self.session.caps:
                     self.session.notify('activity', {'room_id': self.room_id, 'read_message_id': mid})
                 self.queue_render()
@@ -440,7 +499,16 @@ class Window(Adw.ApplicationWindow):
                     self.drafts[rid] = ('', None, [])
                 self.session.error = ''
             self.queue_render()
-        self.session.send(rid, text, reply, self.mention_ids[:], done)
+        mentions = self.mention_ids[:]
+        def post():
+            self.session.send(rid, text, reply, mentions, done)
+        if rid and 'rooms' in self.session.caps and not self.session.store.rooms.get(rid, {}).get('_joined'):
+            def joined(result, error):
+                if error: done(None, error)
+                else: post()
+            self.session.request('room_join', {'room_id': rid}, joined)
+        else:
+            post()
 
     def set_reply(self, msg):
         self.reply = msg['message_id']
@@ -463,8 +531,8 @@ class Window(Adw.ApplicationWindow):
     def connect_dialog(self):
         win, root = self.dialog('Your Apron server')
         root.append(label('Guest or token sign-in. Credentials stay in memory and are forgotten when you close the app.', 'dim-label', True))
-        url = Gtk.Entry(placeholder_text='wss://chat.example/ws', text=self.session.url or 'ws://127.0.0.1:18765')
-        name = Gtk.Entry(placeholder_text='Display name', text=self.session.name or 'You')
+        url = Gtk.Entry(placeholder_text='wss://chat.example/ws', text=self.session.url or self.preferences.data.get('url') or 'ws://127.0.0.1:18765')
+        name = Gtk.Entry(placeholder_text='Display name', text=self.session.name or self.preferences.data.get('name') or 'You')
         token = Gtk.PasswordEntry(placeholder_text='Token (leave empty for guest)', show_peek_icon=True)
         for title, widget in [('Server address', url), ('Display name', name), ('Bearer token', token)]:
             root.append(label(title, 'author')); root.append(widget)
@@ -481,8 +549,29 @@ class Window(Adw.ApplicationWindow):
             self.drafts.clear(); self.reply = None; self.mention_ids = []
             self.editor.get_buffer().set_text('')
             self.room_id = ''; self.page_ids = None; self.cursor = None
+            if self.preferences.data.get('remember'):
+                try: self.preferences.save(url=url.get_text().strip(), name=name.get_text().strip())
+                except OSError: self.session.error = 'Connected, but could not save connection preferences.'
             token.set_text(''); win.close()
         actions.append(button('Connect', connect, 'suggested-action'))
+        if self.keyring.available:
+            saved = button('Use saved session', lambda: None)
+            def use_saved(*_):
+                from .model import validate_url
+                try: address = validate_url(url.get_text().strip())
+                except ValueError as error:
+                    error_label.set_text(str(error)); return
+                saved.set_sensitive(False)
+                def found(value, error):
+                    if not win.get_visible(): return
+                    saved.set_sensitive(True)
+                    if error or not value:
+                        error_label.set_text(error or 'No saved session for this address.'); return
+                    token.set_text(value)
+                    connect()
+                self.keyring.lookup(address, found)
+            saved.connect('clicked', use_saved)
+            root.append(saved)
         root.append(actions)
         win.present()
         return False
@@ -498,23 +587,7 @@ class Window(Adw.ApplicationWindow):
         self.session.request('room_join', {'room_id': rid}, done)
 
     def new_thread(self):
-        win, root = self.dialog('Start a thread')
-        entry = Gtk.Entry(placeholder_text='Thread title')
-        root.append(entry)
-        error_label = label('', 'warning', True); root.append(error_label)
-        def create():
-            title = entry.get_text().strip()
-            if not title:
-                return
-            def done(result, error):
-                if error:
-                    error_label.set_text(safe_text(error.get('message', 'Could not create thread')))
-                    return
-                win.close()
-                self.select_room(result['room_id'])
-            self.session.request('room_set', {'parent_room_id': self.room_id, 'title': title}, done)
-        root.append(button('Create thread', create, 'suggested-action'))
-        win.present()
+        self.room_editor(parent=self.room_id)
 
     def mention_dialog(self):
         win, root = self.dialog('Mention someone')
@@ -554,6 +627,13 @@ class App(Adw.Application):
     def __init__(self, options):
         super().__init__(application_id='chat.apron.Native', flags=Gio.ApplicationFlags.NON_UNIQUE)
         self.options = options
+        action = Gio.SimpleAction.new('open-room', GLib.VariantType.new('s'))
+        def open_room(action, value):
+            win = self.get_active_window()
+            if win and value.get_string() in win.session.store.rooms:
+                win.present(); win.select_room(value.get_string())
+        action.connect('activate', open_room)
+        self.add_action(action)
 
     def do_activate(self):
         if self.get_active_window():
@@ -571,6 +651,10 @@ def main():
     connection.add_argument('--demo', action='store_true', help='Connect only to the local fixture at 127.0.0.1:18765')
     parser.add_argument('--screenshot', help='Save a GTK-rendered PNG after startup (testing only)')
     args = parser.parse_args()
+    if args.server:
+        from .model import validate_url
+        try: validate_url(args.server)
+        except ValueError as error: parser.error(str(error))
     return App(args).run([sys.argv[0]])
 
 

@@ -3,7 +3,8 @@
 A working native Linux client for **Apron protocol 8**, built with Python,
 GTK4, libadwaita, and libsoup 3. Native Wayland widgets; no Electron, WebView,
 HTTP polling, or browser runtime. This is an early vertical slice, not a
-complete replacement for apron-web.
+complete replacement for apron-web. See [FEATURE_PARITY.md](FEATURE_PARITY.md)
+for the source-reviewed functional matrix and remaining work.
 
 ![Native Wayland preview](docs/preview.png)
 
@@ -54,9 +55,14 @@ Without `--demo`, enter your server's `wss://` address and either a guest
 name or an existing bearer token. Guest/token must be offered by that server.
 Remote plain `ws://`, URL credentials, and query parameters are rejected.
 `ws://` is allowed only for `localhost`, `127.0.0.1`, and `::1` development.
-No tokens, rooms, drafts, or messages are written to disk. Reconnect tokens,
-including rotated tokens, live only in memory; quitting loses guest sessions
-unless you have another way to authenticate. Do not use a real token for tests.
+Tokens stay in memory by default. **Preferences → Save session tokens in the
+system keyring** is optional and requires libsecret plus an unlocked Secret
+Service provider (for example a configured desktop keyring). Use **Use saved
+session** in the connection dialog to retrieve one; Forget removes it. There
+is no plaintext file fallback. The native keyring adapter is implemented, but
+actual service operation was not testable in this environment. Rooms, messages,
+drafts and read markers are not written to disk. Connection/name and appearance
+preferences can be remembered separately. Do not use a real token for tests.
 
 In the supplied workspace, native dependencies were extracted under `.deps`
 because system directories are read-only. This **workspace-only** launcher
@@ -74,30 +80,44 @@ scripts/local-env.sh /usr/bin/python3 -m apron_native.app --demo
   correlation, 20-second request timeouts, advertised ping/pong, and randomized
   exponential reconnect backoff (approximately 1–31 seconds).
 - Room directory, thread navigation/discovery, joining a listed room, creating
-  a thread, and basic live room/user updates. No `rooms` capability falls back
+  rooms/private rooms/threads, title/description editing, confirmed leave, member
+  listing and exact-ID add/remove, and live room/user/membership updates. No `rooms` capability falls back
   to the default room, learned from messages.
 - 50-record history requests, older/latest navigation, numeric inclusive log
   cursors using `first_log_id - 1`, snapshot replacement, moves/tombstones,
   embedded replies, and retention pruning. No history capability means live
   scrollback only.
-- Confirmed sends, replies, explicit member-picker mentions, per-room drafts,
+- Confirmed sends, replies, join-before-send for unjoined rooms, explicit
+  member-picker mentions, per-room drafts,
   visible errors, and uncertain-delivery feedback. A disconnected send is
   **never automatically repeated**; check history before sending again.
 - In-session unread counts and explicit mention badges; history does not create
   notifications. Read markers advance when the active window is at the bottom
   of the latest page. Own activity cursors from another connection are honored.
+- Message **⋯** menus: native clipboard copy, edit/delete/move your messages,
+  and start a thread from a message. Edits preserve embeds/mentions/replies/ext;
+  stale local editors and changed connections are rejected rather than silently
+  overwriting newer state. Pending dialogs guard repeated submissions.
+- Reaction counts/toggles and a small native picker; history/live replay per user.
+- Profile display-name and advertised status picker. Native light/dark/system
+  appearance and opt-in content-free mention notifications through Gio. Real
+  desktop notification delivery is still unverified in the headless environment.
+- **Find** searches only the bounded loaded-message cache, not all server history.
 - CommonMark formatted text through a restricted Pango renderer; raw HTML is
   escaped, images/embeds have text fallbacks, and nothing loads remote media.
   Links are displayed as text and do not execute or open automatically.
 - Adaptive sidebar below 760px; selectable message text; native focus behavior.
-  `Ctrl+K` finds rooms, `Ctrl+L` focuses the composer, `Ctrl+Enter` sends,
-  `Escape` cancels a reply. Enter in a room list activates it.
+  `Ctrl+K` finds rooms, `Ctrl+F` searches loaded messages, `Ctrl+L` focuses the
+  composer, `Ctrl+Enter` sends, `Alt+Up` opens the parent, `Alt+N` finds the next
+  unread room, and `Escape` cancels a reply. **?** lists shortcuts. Enter in a room list activates it.
 
 ## Bounds and architecture
 
 `model.py` is a GTK-independent state reducer. `session.py` owns libsoup and
 request/timer lifecycles on the GLib main context. `app.py` builds native GTK
-widgets and coalesces redraws. `render.py` converts CommonMark to an allowlisted
+widgets and coalesces redraws; `ui_actions.py` owns dialogs, `actions.py` preserves
+message fields, `preferences.py` persists allowlisted non-secret settings, and
+`keyring.py` delegates credentials exclusively to Secret Service. `render.py` converts CommonMark to an allowlisted
 Pango subset. No worker polling loop is used.
 
 At most 50 messages are rendered; the shared snapshot cache is capped at
@@ -110,9 +130,10 @@ bounded and control/bidi override characters are removed for display.
 ## Deliberate limitations
 
 - This is not full protocol conformance. Passkeys, email sign-in, durable
-  keyring/session storage, multiple accounts, uploads, rich interactive embeds,
-  reactions, editing/deleting, commands, calls, typing/presence/mutes, desktop
-  notifications, and server push are deferred. The public Apron demo may permit
+  chat/session-cache recovery, multiple accounts, uploads, rich interactive embeds,
+  bulk message operations, commands, calls, typing/idle/mutes, and server push are
+  deferred. The keyring adapter and Gio notifications require real desktop-service
+  validation; they are not yet verified end to end. The public Apron demo may permit
   guest reading but require passkeys for writing; use the local fixture or a
   server that permits guest/token writes for this slice.
 - Recovery discards the prior cache after authentication and fetches a fresh
@@ -121,10 +142,10 @@ bounded and control/bidi override characters are removed for display.
   state across restarts. Archived pages show available snapshots, not a proven
   complete present-day projection after arbitrary cache eviction. Use Latest
   to refresh. Large-history recovery needs a separate persistent store design.
-- Room membership lists are populated from room listings; membership-log replay,
-  user-ID alias/rename reconciliation, and live status semantics are incomplete.
+- Room membership state replays, but timeline membership-event grouping,
+  user-ID alias/rename reconciliation, and full live status semantics are incomplete.
   Unread/mention badges cover newly delivered creations, not mention additions
-  to edits. Room listings over the 256-room cap are truncated. No leave-room UI.
+  to edits. Room listings over the 256-room cap are truncated.
 - The Markdown renderer preserves common emphasis, headings, lists, code, and
   quotes, but is not a rich document viewer; links and media remain inert text.
 - Valid TLS certificates are required; there is no “ignore certificate errors”
@@ -133,15 +154,15 @@ bounded and control/bidi override characters are removed for display.
 ## Measured performance
 
 On the Debian workspace under headless Weston with software rendering, a
-1,000-message official-server room (1,045 text bytes/message) showed **75.6 MiB
-RSS** after loading 11 pages, and **0.016% of one CPU core** over a 9.911-second
-idle sample. The latest benchmark page took 524 ms; ten older pages took
-501–780 ms (median 546 ms). Only 50 messages were rendered, with 587 messages
-and about 663 KiB of serialized data cached across rooms.
+1,000-message official-server room (1,045 text bytes/message) showed **78.7 MiB
+RSS** after loading 11 pages, and **0.011% of one CPU core** over a 10.05-second
+idle sample. The latest benchmark page took 503 ms; ten older pages took
+506–599 ms (median 526 ms). Only 50 messages were rendered, with 591 messages
+and about 664 KiB of serialized data cached across rooms.
 
 These are one-run warm-loopback measurements, not hardware-independent targets.
 They exclude server/compositor CPU and memory. Idle behavior is encouraging,
-but long-message pages still caused a **735 ms worst event-loop interval**:
+but long-message pages still caused a **548 ms worst event-loop interval**:
 row virtualization/incremental layout is needed before calling heavy-history
 interaction consistently responsive. Avoiding an unnecessary loading-state
 rebuild roughly halved page-load time in this synthetic test. See TEST_RESULTS
@@ -172,6 +193,7 @@ aprond --store memory --addr 127.0.0.1:18766 --messages-per-minute 10000 \
   --upload.dir ./test-uploads
 # From this client, in its Python/native development environment:
 python tests/reference_interop.py
+GDK_BACKEND=wayland python tests/ui_daily_smoke.py /tmp/apron-daily.png
 python scripts/seed_reference.py > /tmp/apron-benchmark-seed.json
 APRON_BENCH_ROOM=$(python -c 'import json; print(json.load(open("/tmp/apron-benchmark-seed.json"))["room_id"])') \
   GDK_BACKEND=wayland python tests/benchmark_ui.py

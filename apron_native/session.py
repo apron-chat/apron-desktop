@@ -33,6 +33,7 @@ class Session:
         self.token = ''
         self.blocked_until = 0
         self.on_ready = lambda: None
+        self.on_token = lambda: None
         self.on_message = lambda msg: None
 
     @property
@@ -180,6 +181,14 @@ class Session:
             self.emit()
 
     def frame(self, frame):
+        if 'error' in frame and 'id' not in frame:
+            error = frame['error']
+            if error.get('code') == -32002:
+                self.blocked_until = time.monotonic() + max(1, min(float(error.get('data', {}).get('retry_after', 30)), 86400))
+            if error.get('code') == -32001:
+                self.wanted = False
+            self._lost(safe_text(error.get('message', 'Server closed this connection'), 500))
+            return
         if 'id' in frame and 'method' not in frame:
             pending = self.pending.pop(frame['id'], None)
             if pending:
@@ -226,8 +235,13 @@ class Session:
                 self.on_message(p)
         elif method == 'room_update':
             self.store.listing(p)
+        elif method == 'reactions':
+            self.store.reaction(p)
         elif method == 'user':
             self.store.user(p.get('new', {}))
+            if p.get('you'):
+                self.store.you.update(p['you'])
+                self.store.user(p['you'])
         elif method == 'activity' and p.get('from', {}).get('user_id') == self.store.you.get('user_id'):
             if p.get('read_message_id'):
                 self.store.mark_read(p.get('room_id', ''), p['read_message_id'])
@@ -260,6 +274,7 @@ class Session:
         self.store.user(result['you'])
         self.token = result.get('token', self.token)  # memory only, including rotation
         self.ready = True
+        if result.get('token'): self.on_token()
         self.attempt = 0
         self.state = 'Connected'
         self._clear_timer('hello_timer')

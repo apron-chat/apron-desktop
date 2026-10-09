@@ -1,110 +1,129 @@
-# Verification — 2026-10-09
+# Verification — 2026-10-09, daily-chat milestone
 
-Executed in the saved Debian 13 workspace using isolated, locally extracted
-libraries. Existing apron-web checkout remained unchanged. No production
-server, credentials, bot state, or real chat content was used.
+All network testing used synthetic data on dedicated loopback listeners. No
+production service, real credential, bot process/state, or real chat content
+was used. Existing reference repositories remained unchanged. Native source is
+on its own `feat/native-wayland` branch. No push, merge, or deployment occurred.
 
-## Actual results
+## Actual checks
 
-- Python syntax compilation: passed for all application modules and fixture.
-- Pure reducer/rendering tests: **11 passed**.
-- Real libsoup WebSocket integration tests: **4 passed** against the local
-  fictional protocol-8 fixture. Covered guest auth, token rotation, invalid
-  token stopping without guest fallback, listings, pagination, reply/mention
-  encoding, thread creation, denied sends, disconnect uncertainty, and reconnect.
-- Native GTK workflow smoke test: **passed at 1280×900 and 640×900** under
-  headless Weston. Drove actual widgets through room/thread navigation,
-  backward pagination, per-room drafts, a rejected send with draft retention,
-  a confirmed reply, and screenshots. No Python callback exceptions in these runs.
-- Screenshots captured through GTK's renderer on a Wayland display and visually
-  inspected: `docs/preview.png`, `docs/preview-compact.png`. Sidebar is visible
-  at desktop width and collapses at compact width. Composer remains available.
-- Official Go reference interoperability: **1 end-to-end test passed**, separate
-  from the 4 fixture tests above. Built the unchanged saved official checkout
-  `067083815be6b113e7d35f6569fa35dee0052fd5` with Go 1.27.1. The server identified
-  as `apron-go/8` and ran only at `127.0.0.1:18766/ws`, with `--store memory`,
-  a dedicated temporary upload directory, and synthetic data. Tested guest
-  connection/auth, listing, sending/broadcast-before-confirmation, a reply with
-  an explicit mention, thread creation and thread history, backward pagination
-  over 65 posts, client-initiated disconnect, automatic reconnect, and reloading
-  message history. No application compatibility defect was found in these flows.
-  The Go guest policy can assign a fresh identity on reconnect: this is **not**
-  evidence of official-server token-resume interoperability.
-- After enlarging/darkening metadata and replacing the reply glyph with a
-  labeled button, all 15 fixture/unit tests and both GTK sizes passed again.
-  The compact GTK workflow passed again after the redundant-render optimization.
-- Python wheel built successfully with `pip wheel --no-deps .`.
+- **25 unit/fixture tests passed** (`test_*.py`): 21 pure state/action/rendering/
+  preferences/keyring-adapter tests and 4 actual libsoup WebSocket integration
+  tests against the fictional Python fixture at `127.0.0.1:18765`.
+- **2 official Go reference integration tests passed**, separately from the
+  fixture tests. Built unchanged checkout
+  `067083815be6b113e7d35f6569fa35dee0052fd5` with Go 1.27.1. Server identifies
+  as `apron-go/8`; it ran at `127.0.0.1:18766/ws` with `--store memory`, a
+  dedicated synthetic upload directory, and `--messages-per-minute 10000`.
+- **GTK workflow passed at 1280×900 and 640×900**, headless Weston/Wayland:
+  room/thread navigation, older pages, per-room drafts, denied-send draft
+  retention, confirmed replies and screenshots.
+- **Native daily-action dialogs passed against the official Go server**:
+  repeated Create/Save activation while pending, editing through a TextView,
+  stale-snapshot refusal, reconnect during an open editor and refusal to save
+  in the changed connection, profile update, loaded-cache search, room details,
+  preferences cancel, lazy native message menu, and actual clipboard readback.
+- Python syntax compilation and wheel build passed. Screenshots were captured
+  from GTK rendering and visually reviewed. An initial compact-header overflow
+  was fixed by moving New thread into the Room dialog at compact widths.
+  Reply now has a text label and larger target; metadata is 12px and darker.
 
-Test libraries: Python 3.13 (system interpreter), GTK 4.18.6,
-libadwaita 1.7.6, libsoup 3.6.5, Weston 14.0.2 (headless + pixman),
-markdown-it-py 3.0.0, websockets 15.0.1.
+## Coverage details
 
-Commands used from `/workspace`:
+Pure tests cover numeric identifiers, replay/edit/move/delete and same-log
+redaction, embedded replies, explicit mentions versus text, unread/read cursors,
+retention, inclusive log pagination, byte/count limits, safe URLs/Markdown,
+complete/partial identity state, membership/reaction replay, preservation of
+message client fields, stale-action checks, preference allowlisting and 0600
+atomic files, unavailable-keyring fallback, async Secret Service adapter calls,
+and serialized token rotation followed by Forget.
+
+Fixture tests cover guest auth, token rotation, rejected tokens with no guest
+fallback, listings, history pages, send/reply/mention encoding, thread creation,
+denied sends, uncertain delivery and reconnect without automatic resend.
+
+Official-server tests cover guest connect/list/history/send/reply/thread/
+reconnect; 65-post backward pagination; profile name; private-room creation;
+room title/description changes; edit preserving mentions/replies; repeated
+reaction sets and clearing; private-thread inheritance; move/delete; leaving a
+private thread; and leaving/rejoining a public room. Private-thread rejoin after
+leaving can fail as unknown because the former member can no longer see it;
+this was server policy, and the UI now warns that an invitation may be needed.
+The server may give a guest a fresh identity after reconnect. These tests do
+**not** establish official-server token-resume or account-auth interoperability.
+
+The keyring tests use a mock Secret Service API, not a running credential vault.
+The local environment lacks its GI bindings/service. Notifications use native
+Gio APIs with opt-in UI, but actual desktop-daemon delivery is unverified.
+
+## Reproduction
+
+See README for installing dependencies and starting the fixture. Then:
 
 ```sh
-GSETTINGS_BACKEND=memory XDG_CACHE_HOME=/tmp/apron-cache \
-  apron-native/scripts/local-env.sh /usr/bin/python3 \
-  -m unittest discover -s apron-native/tests -p 'test_*.py' -v
+python -m unittest discover -s tests -p 'test_*.py' -v
+GDK_BACKEND=wayland python tests/ui_smoke.py /tmp/apron-preview.png
 
-XDG_CACHE_HOME=/tmp/apron-cache GSETTINGS_BACKEND=memory \
-XDG_RUNTIME_DIR=/tmp/apron-wayland WAYLAND_DISPLAY=apron-wayland \
-GDK_BACKEND=wayland GSK_RENDERER=cairo \
-  apron-native/scripts/local-env.sh dbus-run-session -- /usr/bin/python3 \
-  apron-native/tests/ui_smoke.py /workspace/apron-native/artifacts/preview.png
+# With the isolated official Go server above running:
+python tests/reference_interop.py
+GDK_BACKEND=wayland python tests/ui_daily_smoke.py /tmp/apron-daily.png
+python scripts/seed_reference.py > /tmp/apron-benchmark-seed.json
+APRON_BENCH_ROOM=$(python -c 'import json; print(json.load(open("/tmp/apron-benchmark-seed.json"))["room_id"])') \
+  GDK_BACKEND=wayland python tests/benchmark_ui.py
 ```
 
-The compact run used `WAYLAND_DISPLAY=apron-wayland-compact`, a second
-headless Weston output at 640×900. Weston used `--backend=headless
---renderer=pixman --shell=…/kiosk-shell.so --idle-time=0 --no-config`;
-`WESTON_MODULE_MAP` located the extracted headless backend.
+In this workspace, each Python invocation used
+`scripts/local-env.sh /usr/bin/python3`, isolated native libraries under
+`.deps`, `GSETTINGS_BACKEND=memory`, `XDG_CACHE_HOME=/tmp/apron-cache`, and
+`APRON_NATIVE_STATE_DIR=/tmp/apron-preferences-test` for GTK flows. Weston used
+headless/pixman, the kiosk shell, no configuration file, no idle timeout, and
+separate 1280×900 and 640×900 outputs. Client rendering used `GSK_RENDERER=cairo`.
+`dbus-run-session` supplied the synthetic test session bus.
 
-## Not run / remaining validation
+Versions: Python 3.13, GTK 4.18.6, libadwaita 1.7.6, libsoup 3.6.5,
+Weston 14.0.2, markdown-it-py 3.0.0, websockets 15.0.1.
 
-- Nix flake evaluation/build (Nix is not installed here); niri-specific launch.
-- The full reference-server conformance suite, official-server token auth/resume,
-  and server-process-restart recovery. Official guest flows above were tested;
-  fixture token tests remain distinct.
-- Real TLS endpoints, passkeys/email, long-duration load/soak, accessibility
-  assistive-technology audit, and hardware/GPU-specific scaling.
+## Actual efficiency measurement
 
-The project is an early usable vertical slice. See README limitations for
-incomplete recovery and optional protocol features; passing these focused tests
-does not establish full protocol conformance.
-
-## Synthetic efficiency measurement
-
-Actual GTK widgets on headless Weston, 1280×900, Cairo software rendering;
-libsoup connected to the official Go server above. Seeded a separate public
-room with 1,000 synthetic messages, each with 1,045 UTF-8 text bytes. Opened the
-room's latest 50-record page, then 10 older pages. The server's record limit
-includes membership changes, so it need not return exactly 50 messages.
-
-After the quality-pass optimization:
+The latest run used the expanded native UI and official Go server. A separate
+public room contained 1,000 synthetic messages of 1,045 text bytes each. The
+client opened its latest 50-record page and ten older pages. Record limits
+include membership changes, so a page need not contain exactly 50 messages.
 
 | Measurement | Observed |
 |---|---:|
-| Startup to initial room history | 137.9 ms |
-| Benchmark-room latest page | 524.0 ms |
-| 10 older pages, minimum / median / maximum | 501.3 / 545.8 / 779.5 ms |
-| Worst 10-ms heartbeat interval during loading | 735.4 ms |
-| Idle wall / process CPU | 9.911 s / 0.0015 s |
-| Idle CPU, percentage of one core | 0.016% |
-| Client RSS / peak RSS | 75.6 / 76.2 MiB |
-| Cached messages / serialized bytes | 587 / 678,989 |
+| Startup to initial room history | 163.1 ms |
+| Benchmark-room latest page | 503.3 ms |
+| 10 older pages: minimum / median / maximum | 506.2 / 525.7 / 598.9 ms |
+| Worst 10-ms heartbeat interval during loading | 548.1 ms |
+| Idle wall / process CPU | 10.05 s / 0.0011 s |
+| Idle CPU, percentage of one core | 0.011% |
+| Client RSS / peak RSS | 78.7 / 78.7 MiB |
+| Cached messages / serialized bytes | 591 / 679,827 |
 | Rendered messages | 50 |
 
-Timings include history handling, widget updates, and draining the GTK main
-context; explicit 50/100-ms settling pauses are subtracted. The heartbeat is a
-10-ms GLib timer removed before idle measurement. Idle uses GLib's blocking
-main loop, process CPU time, and `/proc/self/status` RSS; the measurement does
-not count the server or compositor. Raw data: `docs/benchmark.json` and
-`docs/benchmark-before.json`. Harness: `tests/benchmark_ui.py`; synthetic seed:
-`scripts/seed_reference.py`.
+Timings include history handling, widget updates and draining GTK's main
+context; explicit 50/100-ms settling pauses are subtracted. A 10-ms GLib timer
+measured responsiveness and was removed before idle measurement. Idle uses
+GLib's blocking main loop, process CPU time and `/proc/self/status` RSS, excluding
+server/compositor resources. The initial benchmark incorrectly expected 50
+messages rather than 50 log records; that harness assertion was corrected.
 
-Before removing the redundant nonempty-page rebuild when loading begins,
-older pages took 988–1,362 ms and worst heartbeat interval was 738.7 ms.
-The optimization improved total page-load time, but **did not eliminate long
-main-thread stalls**. Long-message pages still require row virtualization or
-incremental layout. This is one warm local sample, not a throughput or soak
-benchmark, and it cannot establish comparative efficiency against Rust,
-apron-web, hardware-accelerated rendering, or real niri sessions.
+Raw current results: `docs/benchmark.json`. Before avoiding the redundant
+nonempty-page rebuild at loading start, pages took 988–1,362 ms, with a 738.7-ms
+worst heartbeat interval (`docs/benchmark-before.json`). Message menus are now
+created lazily. These changes reduced page-load work, but **long main-thread
+stalls remain**. The next performance step is row virtualization/incremental
+layout. This single warm local sample is not a load/soak test or a comparison
+against Rust, apron-web, GPU rendering, or actual niri hardware.
+
+## Not run / remaining validation
+
+- Nix flake evaluation/build and actual niri launch (tools unavailable).
+- Full protocol conformance, comprehensive arbitrary-history recovery, aliases,
+  real TLS endpoints, actual Secret Service operation, actual OS notifications,
+  passkeys/email, closed-app push, long-duration load and assistive-tech audit.
+- Performance targets across hardware and large/high-churn multi-room workloads.
+
+See FEATURE_PARITY.md for the implemented/partial/missing/intentionally-different
+matrix. This remains an expanded prototype, not complete apron-web parity.

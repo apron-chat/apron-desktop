@@ -1,6 +1,7 @@
 test_connect_list_history_send_reply_thread_and_reconnect (__main__.OfficialGoInterop.test_connect_list_history_send_reply_thread_and_reconnect) ... ok
+test_daily_message_and_room_actions (__main__.OfficialGoInterop.test_daily_message_and_room_actions) ... ok
 
 ----------------------------------------------------------------------
-Ran 1 test in 2.100s
+Ran 2 tests in 1.341s
 
 OK

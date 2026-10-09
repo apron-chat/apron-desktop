@@ -29,7 +29,10 @@ def safe_text(value, limit=32000):
 
 
 def validate_url(url):
+    if not isinstance(url, str) or any(c.isspace() for c in url):
+        raise ValueError('Server addresses cannot contain whitespace.')
     u = urlsplit(url)
+    _ = u.port  # Validate numeric port and range before calling libsoup.
     if u.scheme not in ('ws', 'wss') or not u.hostname or u.username or u.password or u.fragment or u.query:
         raise ValueError('Use a ws:// or wss:// address without credentials, query, or fragment')
     if u.scheme == 'ws' and u.hostname not in ('localhost', '127.0.0.1', '::1'):
@@ -51,13 +54,17 @@ class Store:
         self.evicted = False
         self.message_sizes = {}
         self.cache_bytes = 0
+        self.reactions = OrderedDict()
+        self.memberships = OrderedDict()
 
-    def user(self, user):
+    def user(self, user, complete=False):
         if not isinstance(user, dict) or not isinstance(user.get('user_id'), str):
             return
         key = user['user_id']
         known = {k: safe_text(v, 300) for k, v in user.items() if k in ('user_id', 'name', 'status') and isinstance(v, str)}
-        self.users[key] = {**self.users.get(key, {}), **known}
+        if isinstance(user.get('roles'), list):
+            known['roles'] = [safe_text(r, 80) for r in user['roles'][:20] if isinstance(r, str)]
+        self.users[key] = {**({} if complete else self.users.get(key, {})), **known}
         self.users.move_to_end(key)
         while len(self.users) > MAX_USERS:
             self.users.popitem(last=False)
@@ -70,7 +77,8 @@ class Store:
         if 'log_id' in room and 'log_id' in old and number(room['log_id']) < number(old['log_id']):
             return
         # Room records are snapshots, except local subscription metadata.
-        self.rooms[key] = {**room, '_joined': old.get('_joined', False) if joined is None else joined}
+        kept = {k: old[k] for k in ('members', 'member_count') if k in old and k not in room}
+        self.rooms[key] = {**room, **kept, '_joined': old.get('_joined', False) if joined is None else joined}
         for user in room.get('members', []):
             self.user(user)
         while len(self.rooms) > MAX_ROOMS:
@@ -86,8 +94,12 @@ class Store:
             rid = room.get('room_id')
             if rid in self.rooms:
                 self.rooms[rid]['_joined'] = False
+                self.unread[rid] = self.mentions[rid] = 0
+                self.unread_ids.pop(rid, None); self.mention_ids.pop(rid, None)
         for user in result.get('users', []):
-            self.user(user)
+            self.user(user, complete=True)
+        for record in result.get('memberships', []):
+            self.membership(record)
 
     def message(self, msg, live=False, depth=0):
         if not isinstance(msg, dict) or not isinstance(msg.get('message_id'), str):
@@ -98,7 +110,7 @@ class Store:
         if not isinstance(rid, str):
             return False
         old = self.messages.get(mid)
-        if old and number(old['log_id']) >= log:
+        if old and (number(old['log_id']) > log or (number(old['log_id']) == log and not (msg.get('deleted') and not old.get('deleted')))):
             return False
         if depth == 0 and isinstance(msg.get('reply_to'), dict) and 'log_id' in msg['reply_to']:
             self.message(msg['reply_to'], depth=1)
@@ -152,5 +164,43 @@ class Store:
         for msg in result.get('messages', []):
             if number(msg['log_id']) >= lower:
                 self.message(msg)
+        for record in result.get('reactions', []):
+            self.reaction(record)
         first = result.get('first_log_id')
         return str(number(first) - 1) if result.get('more') and first and number(first) > lower else None
+
+    def reaction(self, record):
+        mid = record.get('message_id')
+        if not isinstance(mid, str): return
+        log = number(record.get('log_id'))
+        for entry in record.get('reactions', [])[:256]:
+            uid = entry.get('from', {}).get('user_id')
+            if not isinstance(uid, str): continue
+            key = (mid, uid)
+            if self.reactions.get(key, (0, []))[0] < log:
+                self.reactions[key] = (log, sorted(set(safe_text(e, 32) for e in entry.get('emojis', [])[:32] if isinstance(e, str))))
+                self.reactions.move_to_end(key)
+        while len(self.reactions) > 4000: self.reactions.popitem(last=False)
+
+    def reaction_counts(self, mid):
+        counts = {}
+        for (message, uid), (_, emojis) in self.reactions.items():
+            if message == mid:
+                for emoji in emojis: counts[emoji] = counts.get(emoji, 0) + 1
+        return counts
+
+    def membership(self, record):
+        rid = record.get('room_id')
+        if rid not in self.rooms: return
+        log = number(record.get('log_id'))
+        members = {m['user_id']: m for m in self.rooms[rid].get('members', []) if 'user_id' in m}
+        for entry in record.get('members', [])[:1000]:
+            user = entry.get('user', {}); uid = user.get('user_id')
+            if not isinstance(uid, str): continue
+            key = (rid, uid)
+            if log <= self.memberships.get(key, -1): continue
+            self.memberships[key] = log
+            if entry.get('joined'): members[uid] = user
+            else: members.pop(uid, None)
+        self.rooms[rid]['members'] = list(members.values())[:1000]
+        while len(self.memberships) > 4000: self.memberships.popitem(last=False)
