@@ -1,0 +1,13 @@
+Processing ./apron-native
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Getting requirements to build wheel: started
+  Getting requirements to build wheel: finished with status 'done'
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Building wheels for collected packages: apron-native
+  Building wheel for apron-native (pyproject.toml): started
+  Building wheel for apron-native (pyproject.toml): finished with status 'done'
+  Created wheel for apron-native: filename=apron_native-0.1.0-py3-none-any.whl size=17114 sha256=a3024de5612338d135205409cbf155bbaa5e552c2d20ddec5d8a4d5115577519
+  Stored in directory: /tmp/pip-ephem-wheel-cache-_25cmu2t/wheels/44/1c/b0/4a48375b60e1d46958f5302377b67ddf18ffb9b99543c4a93a
+Successfully built apron-native

@@ -1,0 +1,20 @@
+window { background: @window_bg_color; }
+.brand { font-size: 23px; font-weight: 800; letter-spacing: -1px; }
+.brand-icon { background: #0c8875; color: white; border-radius: 13px; padding: 10px; font-weight: 900; font-size: 23px; }
+.sidebar { background: alpha(@window_fg_color, 0.035); }
+.room-list { background: transparent; }
+.room-list row { border-radius: 9px; margin: 2px 8px; padding: 7px 8px; }
+.room-list row:selected { background: alpha(#0c8875, 0.19); }
+.section-label { font-size: 11px; font-weight: 700; letter-spacing: 1px; opacity: 0.55; }
+.room-title { font-size: 21px; font-weight: 750; }
+.message { padding: 13px 17px; border-radius: 12px; background: alpha(@window_fg_color, 0.035); }
+.message.mentioned { border-left: 3px solid #d9a441; background: alpha(#d9a441, 0.08); }
+.author { font-weight: 700; }
+.avatar { min-width: 32px; min-height: 32px; border-radius: 10px; background: alpha(#0c8875, 0.15); color: #31bba6; font-weight: 800; }
+.message-body { line-height: 1.35; }
+.metadata { font-size: 11px; opacity: 0.55; }
+.composer { border: 1px solid alpha(@window_fg_color, 0.15); border-radius: 12px; padding: 12px; }
+.composer textview, .composer textview text { background: transparent; }
+.connection { font-size: 12px; }
+.badge { background: alpha(#0c8875, 0.2); border-radius: 12px; padding: 2px 7px; font-size: 11px; font-weight: bold; }
+.warning { color: #c88825; }

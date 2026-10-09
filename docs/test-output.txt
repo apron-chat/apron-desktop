@@ -1,0 +1,20 @@
+test_bounded_memory (test_model.ModelTests.test_bounded_memory) ... ok
+test_byte_budget_and_partial_read_cursor (test_model.ModelTests.test_byte_budget_and_partial_read_cursor) ... ok
+test_current_user_merge_and_room_replay (test_model.ModelTests.test_current_user_merge_and_room_replay) ... ok
+test_embedded_snapshot (test_model.ModelTests.test_embedded_snapshot) ... ok
+test_markdown_never_passes_untrusted_markup (test_model.ModelTests.test_markdown_never_passes_untrusted_markup) ... ok
+test_mentions_are_explicit_and_history_does_not_notify (test_model.ModelTests.test_mentions_are_explicit_and_history_does_not_notify) ... ok
+test_numeric_ids_are_not_lexicographic (test_model.ModelTests.test_numeric_ids_are_not_lexicographic) ... ok
+test_pagination_uses_log_bounds_not_compacted_messages (test_model.ModelTests.test_pagination_uses_log_bounds_not_compacted_messages) ... ok
+test_retention_removes_unverifiable_cache (test_model.ModelTests.test_retention_removes_unverifiable_cache) ... ok
+test_safe_url (test_model.ModelTests.test_safe_url) ... ok
+test_snapshot_replay_edit_move_delete (test_model.ModelTests.test_snapshot_replay_edit_move_delete) ... ok
+test_auth_listing_history_pagination_send_reply_and_thread (test_session.SessionTests.test_auth_listing_history_pagination_send_reply_and_thread) ... ok
+test_denied_token_stops_without_guest_fallback (test_session.SessionTests.test_denied_token_stops_without_guest_fallback) ... ok
+test_reconnect_token_and_uncertain_send (test_session.SessionTests.test_reconnect_token_and_uncertain_send) ... ok
+test_send_error_preserves_error_and_no_automatic_retry (test_session.SessionTests.test_send_error_preserves_error_and_no_automatic_retry) ... ok
+
+----------------------------------------------------------------------
+Ran 15 tests in 2.204s
+
+OK

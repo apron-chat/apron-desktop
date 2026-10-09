@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Apron
+Comment=Native conversations on Linux
+Exec=apron-native
+Icon=chat.apron.Native
+Type=Application
+Categories=Network;Chat;
+StartupNotify=true
+Terminal=false
