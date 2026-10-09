@@ -6,3 +6,5 @@ artifacts/
 result
 build/
 *.egg-info/
+
+.cache/

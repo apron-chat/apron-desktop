@@ -1,0 +1,6 @@
+test_connect_list_history_send_reply_thread_and_reconnect (__main__.OfficialGoInterop.test_connect_list_history_send_reply_thread_and_reconnect) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 2.100s
+
+OK

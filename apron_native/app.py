@@ -69,7 +69,9 @@ class Window(Adw.ApplicationWindow):
         self.add_breakpoint(breakpoint)
         self.split.bind_property('collapsed', self.nav, 'visible', 2)
         self.present()
-        if options.demo:
+        if getattr(options, 'server', None):
+            self.session.connect(options.server, 'You')
+        elif options.demo:
             self.session.connect('ws://127.0.0.1:18765', 'You')
         else:
             GLib.idle_add(self.connect_dialog)
@@ -256,7 +258,8 @@ class Window(Adw.ApplicationWindow):
 
     def render_messages(self):
         messages = self.visible_messages()
-        signature = repr((messages, self.session.store.users, self.room_id, self.loading))
+        # A loading-state transition must not rebuild an unchanged nonempty page.
+        signature = repr((messages, self.session.store.users, self.room_id, self.loading if not messages else False))
         if signature == self.message_signature:
             return
         self.message_signature = signature
@@ -299,7 +302,8 @@ class Window(Adw.ApplicationWindow):
             stamp = ''
         top.append(label(stamp, 'metadata'))
         if not msg.get('deleted'):
-            reply = button('↩', lambda: self.set_reply(msg), 'flat')
+            reply = button('Reply', lambda: self.set_reply(msg), 'flat')
+            reply.add_css_class('reply-button')
             reply.set_tooltip_text('Reply to ' + name)
             top.append(reply)
         card.append(top)
@@ -562,7 +566,9 @@ class App(Adw.Application):
 
 def main():
     parser = argparse.ArgumentParser(description='Native Apron client')
-    parser.add_argument('--demo', action='store_true', help='Connect only to the local fixture at 127.0.0.1:18765')
+    connection = parser.add_mutually_exclusive_group()
+    connection.add_argument('--server', help='Connect as a guest to this ws(s) URL')
+    connection.add_argument('--demo', action='store_true', help='Connect only to the local fixture at 127.0.0.1:18765')
     parser.add_argument('--screenshot', help='Save a GTK-rendered PNG after startup (testing only)')
     args = parser.parse_args()
     return App(args).run([sys.argv[0]])

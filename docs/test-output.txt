@@ -15,6 +15,6 @@ test_reconnect_token_and_uncertain_send (test_session.SessionTests.test_reconnec
 test_send_error_preserves_error_and_no_automatic_retry (test_session.SessionTests.test_send_error_preserves_error_and_no_automatic_retry) ... ok
 
 ----------------------------------------------------------------------
-Ran 15 tests in 2.204s
+Ran 15 tests in 1.915s
 
 OK

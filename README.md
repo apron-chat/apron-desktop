@@ -130,6 +130,23 @@ bounded and control/bidi override characters are removed for display.
 - Valid TLS certificates are required; there is no “ignore certificate errors”
   switch. No SSH transport, proxy configuration UI, or background tray mode.
 
+## Measured performance
+
+On the Debian workspace under headless Weston with software rendering, a
+1,000-message official-server room (1,045 text bytes/message) showed **75.6 MiB
+RSS** after loading 11 pages, and **0.016% of one CPU core** over a 9.911-second
+idle sample. The latest benchmark page took 524 ms; ten older pages took
+501–780 ms (median 546 ms). Only 50 messages were rendered, with 587 messages
+and about 663 KiB of serialized data cached across rooms.
+
+These are one-run warm-loopback measurements, not hardware-independent targets.
+They exclude server/compositor CPU and memory. Idle behavior is encouraging,
+but long-message pages still caused a **735 ms worst event-loop interval**:
+row virtualization/incremental layout is needed before calling heavy-history
+interaction consistently responsive. Avoiding an unnecessary loading-state
+rebuild roughly halved page-load time in this synthetic test. See TEST_RESULTS
+and the included raw measurements for method and caveats.
+
 ## Verification
 
 Start the **local fixture only**, then run:
@@ -144,6 +161,25 @@ The fixture binds only `127.0.0.1:18765`, uses fictional people/messages, keeps
 state in memory, and is a test harness rather than a deployable server. Its
 `/test-denied` and `/test-disconnect` message texts deliberately exercise errors.
 Do not expose it to a network or use it with real data.
+
+The official Go reference server was also built and tested separately on
+loopback with synthetic data and `--store memory`; connect/list/history/send/
+reply/thread/reconnect passed. Reproduce using an isolated official server:
+
+```sh
+# Build apron-server-go, then run its binary in a dedicated test directory:
+aprond --store memory --addr 127.0.0.1:18766 --messages-per-minute 10000 \
+  --upload.dir ./test-uploads
+# From this client, in its Python/native development environment:
+python tests/reference_interop.py
+python scripts/seed_reference.py > /tmp/apron-benchmark-seed.json
+APRON_BENCH_ROOM=$(python -c 'import json; print(json.load(open("/tmp/apron-benchmark-seed.json"))["room_id"])') \
+  GDK_BACKEND=wayland python tests/benchmark_ui.py
+```
+
+These scripts hard-code the dedicated loopback test endpoint. `--server
+ws://127.0.0.1:18766/ws` also opens it in the client as a guest. Never point
+these tests at a server with real content.
 
 See [TEST_RESULTS.md](TEST_RESULTS.md) for actual checks, versions, commands,
 and unrun checks. Screenshots show actual GTK rendering under headless Weston,
