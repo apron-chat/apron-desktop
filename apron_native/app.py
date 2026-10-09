@@ -26,6 +26,9 @@ def label(text='', css=None, wrap=False):
     w = Gtk.Label(label=safe_text(text), xalign=0)
     if css:
         w.add_css_class(css)
+    if css == 'warning':
+        w.set_visible(bool(text))
+        w.connect('notify::label', lambda widget, _: widget.set_visible(bool(widget.get_text())))
     w.set_wrap(wrap)
     w.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
     return w
@@ -36,6 +39,15 @@ def button(text, callback, css=None):
     w.connect('clicked', lambda *_: callback())
     if css:
         w.add_css_class(css)
+    return w
+
+
+def icon_button(icon, title, callback):
+    w = Gtk.Button(icon_name=icon, tooltip_text=title)
+    w.add_css_class('flat')
+    w.set_size_request(36, 36)
+    w.update_property([Gtk.AccessibleProperty.LABEL], [title])
+    w.connect('clicked', lambda *_: callback())
     return w
 
 
@@ -69,6 +81,7 @@ class Window(DailyActions, Adw.ApplicationWindow):
         self.mention_ids = []
         self.sending = False
         self.render_pending = False
+        self.message_menu_open = False
         self.list_signature = self.message_signature = None
         self.focus_bottom = True
         self.build()
@@ -76,7 +89,6 @@ class Window(DailyActions, Adw.ApplicationWindow):
         self.connect('notify::is-active', lambda *_: self.read_visible())
         breakpoint = Adw.Breakpoint.new(Adw.BreakpointCondition.parse('max-width: 760px'))
         breakpoint.add_setter(self.split, 'collapsed', True)
-        breakpoint.add_setter(self.thread_button, 'visible', False)
         self.add_breakpoint(breakpoint)
         self.split.bind_property('collapsed', self.nav, 'visible', 2)
         self.present()
@@ -91,24 +103,28 @@ class Window(DailyActions, Adw.ApplicationWindow):
 
     def build(self):
         self.split = Adw.OverlaySplitView()
-        self.split.set_min_sidebar_width(220)
+        self.split.set_min_sidebar_width(232)
         self.split.set_max_sidebar_width(280)
         self.split.set_sidebar_width_fraction(0.24)
-        sidebar = box(True, 16)
+        sidebar = box(True, 20)
         sidebar.add_css_class('sidebar')
-        brand = box(margin=20)
-        brand.append(label('a', 'brand-icon'))
-        names = box(True, 2)
-        names.append(label('apron', 'brand'))
-        names.append(label('A little closer.', 'dim-label'))
-        brand.append(names)
+        brand = box(spacing=12, margin=24)
+        brand.set_margin_bottom(0)
+        mark = label('a', 'brand-icon'); mark.set_xalign(.5)
+        brand.append(mark)
+        brand.append(label('apron', 'brand'))
         sidebar.append(brand)
-        self.search = Gtk.SearchEntry(placeholder_text='Find a room  ·  Ctrl+K')
+        self.search = Gtk.SearchEntry(placeholder_text='Find a room')
+        self.search.set_tooltip_text('Find a room · Ctrl+K')
         self.search.set_margin_start(16); self.search.set_margin_end(16)
         self.search.connect('search-changed', lambda *_: self.render_rooms(force=True))
         sidebar.append(self.search)
-        section = label('YOUR SPACES', 'section-label')
-        section.set_margin_start(24)
+        section = box()
+        section.set_margin_start(24); section.set_margin_end(16)
+        heading = label('Rooms', 'section-label'); heading.set_hexpand(True)
+        section.append(heading)
+        self.create_room_button = icon_button('list-add-symbolic', 'Create a room', self.room_editor)
+        section.append(self.create_room_button)
         sidebar.append(section)
         self.rooms = Gtk.ListBox(selection_mode=Gtk.SelectionMode.SINGLE)
         self.rooms.add_css_class('room-list')
@@ -116,88 +132,120 @@ class Window(DailyActions, Adw.ApplicationWindow):
         scroll = Gtk.ScrolledWindow(vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER)
         scroll.set_child(self.rooms)
         sidebar.append(scroll)
-        bottom = box(True, 8, 16)
+        bottom = box(spacing=12, margin=16)
+        bottom.add_css_class('account-row')
+        self.account_avatar = label('•', 'avatar')
+        self.account_avatar.set_xalign(.5)
+        bottom.append(self.account_avatar)
+        identity = box(True, 3); identity.set_hexpand(True)
         self.identity = label('Not signed in', 'author')
+        self.identity.set_ellipsize(Pango.EllipsizeMode.END)
         self.status = label('Disconnected', 'connection')
-        bottom.append(self.identity); bottom.append(self.status)
-        bottom.append(button('Connection settings', self.connect_dialog))
-        self.profile_button = button('Profile', self.profile_dialog)
-        bottom.append(self.profile_button)
-        bottom.append(button('Preferences', self.preferences_dialog))
-        self.create_room_button = button('Create a room', self.room_editor)
-        bottom.append(self.create_room_button)
+        self.status.set_ellipsize(Pango.EllipsizeMode.END)
+        identity.append(self.identity); identity.append(self.status)
+        bottom.append(identity)
+        self.account_menu = self.menu(lambda: [
+            ('Your profile…', self.profile_dialog, self.session.ready),
+            ('Connection…', self.connect_dialog, True),
+            ('Preferences…', self.preferences_dialog, True),
+            ('Keyboard shortcuts', self.shortcuts_dialog, True),
+        ], 'Account and preferences')
+        bottom.append(self.account_menu)
         sidebar.append(bottom)
         self.split.set_sidebar(sidebar)
 
         content = box(True, 0)
+        content.add_css_class('conversation')
         header = Adw.HeaderBar()
-        self.nav = button('☰', lambda: self.split.set_show_sidebar(not self.split.get_show_sidebar()))
+        header.add_css_class('flat')
+        self.nav = icon_button('sidebar-show-symbolic', 'Show rooms · Ctrl+K', lambda: self.split.set_show_sidebar(not self.split.get_show_sidebar()))
         self.nav.set_visible(False)
-        self.nav.set_tooltip_text('Show rooms')
         header.pack_start(self.nav)
-        self.title_label = label('Welcome to Apron', 'room-title')
+        titles = box(True, 2)
+        self.title_label = label('Apron', 'room-title')
+        self.title_label.set_xalign(.5)
         self.title_label.set_ellipsize(Pango.EllipsizeMode.END)
         self.title_label.set_max_width_chars(22)
-        header.set_title_widget(self.title_label)
-        self.thread_button = button('New thread', self.new_thread)
-        header.pack_end(self.thread_button)
-        self.details_button = button('Room', self.room_details)
-        self.details_button.set_tooltip_text('Room details, members, and management')
-        header.pack_end(self.details_button)
-        header.pack_start(button('Find', self.search_messages))
-        shortcuts = button('?', self.shortcuts_dialog)
-        shortcuts.set_tooltip_text('Keyboard shortcuts')
-        header.pack_start(shortcuts)
+        self.subtitle = label('A space for conversation', 'metadata')
+        self.subtitle.set_xalign(.5)
+        self.subtitle.set_ellipsize(Pango.EllipsizeMode.END)
+        self.subtitle.set_max_width_chars(40)
+        titles.append(self.title_label); titles.append(self.subtitle)
+        header.set_title_widget(titles)
+        self.room_menu = self.menu(lambda: [
+            ('Room details and members…', self.room_details, self.session.ready and bool(self.room_id)),
+            ('Start a thread…', self.new_thread, self.session.ready and 'rooms' in self.session.caps and bool(self.room_id)),
+            ('Find loaded messages…', self.search_messages, True),
+        ], 'Room actions')
+        header.pack_end(self.room_menu)
+        header.pack_end(icon_button('system-search-symbolic', 'Find loaded messages · Ctrl+F', self.search_messages))
         content.append(header)
         self.banner = Adw.Banner(title='Connect to your server to begin.')
         content.append(self.banner)
-        tools = box(margin=16)
-        self.subtitle = label('Native on Linux. At home on Wayland.', 'dim-label')
-        self.subtitle.set_ellipsize(Pango.EllipsizeMode.END)
-        self.subtitle.set_hexpand(True)
-        tools.append(self.subtitle)
-        self.join = button('Join room', self.join_room, 'suggested-action')
-        tools.append(self.join)
-        self.old_button = button('← Older', self.load_older)
-        tools.append(self.old_button)
-        self.latest_button = button('Latest ↓', lambda: self.load_history(latest=True))
-        tools.append(self.latest_button)
-        content.append(tools)
-        self.messages = box(True, 10, 20)
+        self.messages = box(True, 12, 24)
         self.messages.set_valign(Gtk.Align.START)
+        timeline = box(True, 0)
+        history = box(spacing=8)
+        history.set_halign(Gtk.Align.CENTER)
+        history.set_margin_top(12)
+        self.old_button = button('Load earlier messages', self.load_older, 'flat')
+        self.old_button.add_css_class('history-control')
+        history.append(self.old_button)
+        timeline.append(history); timeline.append(self.messages)
         clamp = Adw.Clamp(maximum_size=900, tightening_threshold=700)
-        clamp.set_child(self.messages)
+        clamp.set_child(timeline)
         self.scroll = Gtk.ScrolledWindow(vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER)
         self.scroll.set_child(clamp)
         self.scroll.get_vadjustment().connect('value-changed', self.scrolled)
         content.append(self.scroll)
         composer_outer = box(True, 8, 20)
+        self.context_controls = box(spacing=8)
+        self.context_controls.set_halign(Gtk.Align.CENTER)
+        self.join = button('Join this room', self.join_room, 'suggested-action')
+        self.context_controls.append(self.join)
+        self.latest_button = button('Back to latest ↓', lambda: self.load_history(latest=True), 'pill')
+        self.context_controls.append(self.latest_button)
+        composer_outer.append(self.context_controls)
         self.reply_box = box()
-        self.reply_label = label('', 'dim-label')
+        self.reply_box.add_css_class('reply-strip')
+        self.reply_label = label('', 'metadata')
         self.reply_label.set_hexpand(True); self.reply_label.set_ellipsize(Pango.EllipsizeMode.END)
         self.reply_box.append(self.reply_label)
-        self.reply_box.append(button('Cancel reply', self.cancel_reply))
+        self.reply_box.append(icon_button('window-close-symbolic', 'Cancel reply · Escape', self.cancel_reply))
         composer_outer.append(self.reply_box)
         compose = box(True, 8)
         compose.add_css_class('composer')
         self.editor = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD_CHAR, top_margin=4, bottom_margin=4)
         self.editor.set_accepts_tab(False)
-        self.editor.set_size_request(-1, 64)
+        self.editor.set_size_request(-1, 44)
+        self.editor.update_property([Gtk.AccessibleProperty.LABEL], ['Message composer'])
         self.editor.get_buffer().connect('changed', lambda *_: self.update_send())
-        editor_scroll = Gtk.ScrolledWindow(min_content_height=64, max_content_height=150, propagate_natural_height=True)
+        editor_scroll = Gtk.ScrolledWindow(min_content_height=44, max_content_height=150, propagate_natural_height=True)
         editor_scroll.set_child(self.editor)
-        compose.append(editor_scroll)
+        overlay = Gtk.Overlay()
+        overlay.set_child(editor_scroll)
+        self.composer_placeholder = label('Write a message…', 'composer-placeholder')
+        self.composer_placeholder.set_halign(Gtk.Align.START); self.composer_placeholder.set_valign(Gtk.Align.START)
+        self.composer_placeholder.set_margin_top(4)
+        self.composer_placeholder.set_can_target(False)
+        overlay.add_overlay(self.composer_placeholder)
+        compose.append(overlay)
         actions = box()
-        self.mention_button = button('@ Mention', self.mention_dialog)
+        self.mention_button = button('@', self.mention_dialog, 'flat')
+        self.mention_button.set_size_request(36, 36)
+        self.mention_button.set_tooltip_text('Mention a member')
+        self.mention_button.update_property([Gtk.AccessibleProperty.LABEL], ['Mention a member'])
         actions.append(self.mention_button)
         self.hint = label('Ctrl+Enter to send', 'metadata')
         self.hint.set_hexpand(True)
         actions.append(self.hint)
-        self.send_button = button('Send ↑', self.send, 'suggested-action')
+        self.send_button = button('Send', self.send, 'suggested-action')
         actions.append(self.send_button)
         compose.append(actions)
         composer_outer.append(compose)
-        content.append(composer_outer)
+        composer_clamp = Adw.Clamp(maximum_size=900, tightening_threshold=700)
+        composer_clamp.set_child(composer_outer)
+        content.append(composer_clamp)
         self.split.set_content(content)
         self.set_content(self.split)
         keys = Gtk.EventControllerKey()
@@ -208,6 +256,10 @@ class Window(DailyActions, Adw.ApplicationWindow):
     def key_pressed(self, _, key, code, state):
         ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
         alt = bool(state & Gdk.ModifierType.ALT_MASK)
+        if ctrl and key == Gdk.KEY_Page_Up:
+            self.load_older(); return True
+        if ctrl and key == Gdk.KEY_Page_Down:
+            self.load_history(latest=True); return True
         if ctrl and key == Gdk.KEY_f:
             self.search_messages(); return True
         if alt and key == Gdk.KEY_n:
@@ -235,21 +287,19 @@ class Window(DailyActions, Adw.ApplicationWindow):
         self.render_pending = False
         s = self.session
         self.status.set_text(('● ' if s.ready else '○ ') + s.state)
+        self.account_avatar.set_text(safe_text(s.store.you.get('name') or s.store.you.get('user_id') or 'a')[:1].upper())
         self.identity.set_text(safe_text(s.store.you.get('name') or s.store.you.get('user_id') or 'Not signed in'))
         room = s.store.rooms.get(self.room_id, {})
         self.title_label.set_text(safe_text(room.get('title') or self.room_id or 'Apron'))
         self.subtitle.set_text(safe_text(room.get('description') or ('Thread' if room.get('parent_room_id') else 'Room conversation')))
         self.banner.set_title(safe_text(s.error or ('' if s.ready else s.state + ' · Messages are read-only until connected.')))
         self.banner.set_revealed(bool(s.error or not s.ready))
-        self.profile_button.set_sensitive(s.ready)
         self.create_room_button.set_sensitive(s.ready and 'rooms' in s.caps)
-        self.details_button.set_sensitive(s.ready and bool(self.room_id))
-        self.thread_button.set_sensitive(s.ready and 'rooms' in s.caps and bool(self.room_id))
         self.join.set_visible(s.ready and 'rooms' in s.caps and bool(self.room_id) and not room.get('_joined'))
         self.old_button.set_sensitive(s.ready and self.cursor is not None and not self.loading)
         self.latest_button.set_sensitive(s.ready and 'history' in s.caps and not self.loading)
-        self.old_button.set_visible('history' in s.caps)
-        self.latest_button.set_visible('history' in s.caps)
+        self.old_button.set_visible('history' in s.caps and self.cursor is not None)
+        self.latest_button.set_visible('history' in s.caps and (self.older or not self.focus_bottom))
         self.reply_box.set_visible(self.reply is not None)
         self.mention_button.set_sensitive(s.ready and bool(room.get('members')))
         self.render_rooms()
@@ -273,6 +323,7 @@ class Window(DailyActions, Adw.ApplicationWindow):
             row = Gtk.ListBoxRow()
             row.rid = rid
             b = box()
+            if r.get('parent_room_id'): b.set_margin_start(16)
             b.append(label('↳' if r.get('parent_room_id') else '#', 'dim-label'))
             title = label(name)
             title.set_hexpand(True); title.set_ellipsize(Pango.EllipsizeMode.END)
@@ -294,29 +345,43 @@ class Window(DailyActions, Adw.ApplicationWindow):
         return timeline[-PAGE_SIZE:]
 
     def render_messages(self):
+        if self.message_menu_open: return
         messages = self.visible_messages()
         # A loading-state transition must not rebuild an unchanged nonempty page.
         signature = repr((messages, self.session.store.users, self.session.store.reactions, self.session.ready, self.session.caps, self.room_id, self.loading if not messages else False))
         if signature == self.message_signature:
             return
+        focused = self.get_focus()
+        focused_message = None
+        while focused is not None:
+            if hasattr(focused, 'apron_message_id'):
+                focused_message = focused.apron_message_id; break
+            focused = focused.get_parent()
         self.message_signature = signature
         was_bottom = self.focus_bottom
         clear(self.messages)
         if not messages:
-            status = Adw.StatusPage(title='Loading conversation…' if self.loading else 'A space for conversation',
-                                    description='Connect to a server, choose a room, and say hello.' if not self.session.ready else 'No messages in this page yet.',
+            status = Adw.StatusPage(title='Loading conversation…' if self.loading else 'Start a conversation' if self.session.ready else 'Welcome to Apron',
+                                    description='Fetching recent messages…' if self.loading else 'Connect to your server to find your people.' if not self.session.ready else 'Nothing here yet. Say hello when you’re ready.',
                                     icon_name='chat-message-new-symbolic')
+            status.add_css_class('empty-state')
             self.messages.append(status)
         else:
             note = label(('OLDER MESSAGES' if self.older else 'LATEST MESSAGES') + f'  ·  {len(messages)} shown', 'section-label')
             self.messages.append(note)
             for msg in messages:
-                self.messages.append(self.message_widget(msg))
+                row = self.message_widget(msg)
+                self.messages.append(row)
+                if msg['message_id'] == focused_message:
+                    GLib.idle_add(lambda row=row: (row.grab_focus() if row.get_root() is self and self.get_focus() is None else False, False)[1])
         if was_bottom and not self.older:
             GLib.idle_add(self.scroll_bottom)
 
     def message_widget(self, msg):
         outer = box(spacing=12)
+        outer.add_css_class('message-row')
+        outer.apron_message_id = msg['message_id']
+        outer.set_focusable(True)
         user = msg.get('from', {})
         uid = user.get('user_id', '?')
         user = {**user, **self.session.store.users.get(uid, {})}
@@ -340,18 +405,31 @@ class Window(DailyActions, Adw.ApplicationWindow):
         except (ValueError, OverflowError, OSError):
             stamp = ''
         top.append(label(stamp, 'metadata'))
+        actions = box(spacing=2)
+        actions.add_css_class('message-actions')
         if not msg.get('deleted'):
             reply = button('Reply', lambda: self.set_reply(msg), 'flat')
             reply.add_css_class('reply-button')
             reply.set_tooltip_text('Reply to ' + name)
-            top.append(reply)
-        top.append(self.message_menu(msg))
+            actions.append(reply)
+        menu = self.message_menu(msg)
+        actions.append(menu); top.append(actions)
+        context = Gtk.GestureClick(button=3)
+        context.connect('pressed', lambda *_: menu.popup())
+        outer.add_controller(context)
+        keys = Gtk.EventControllerKey()
+        def message_keys(_, key, code, state):
+            if key == Gdk.KEY_Menu or (key == Gdk.KEY_F10 and state & Gdk.ModifierType.SHIFT_MASK):
+                menu.popup(); return True
+            return False
+        keys.connect('key-pressed', message_keys); outer.add_controller(keys)
         card.append(top)
         target = msg.get('reply_to', {})
         if target.get('message_id'):
             original = self.session.store.messages.get(target['message_id'], target)
             excerpt = original.get('body', {}).get('text') or 'Message ' + target['message_id']
-            card.append(label('↳ ' + safe_text(excerpt, 100), 'dim-label', True))
+            quote = label(safe_text(excerpt, 100), 'reply-quote', True)
+            card.append(quote)
         body = msg.get('body', {})
         text = label('', 'message-body', True)
         text.set_selectable(True)
@@ -368,9 +446,7 @@ class Window(DailyActions, Adw.ApplicationWindow):
             reactions = box()
             for emoji, count in self.session.store.reaction_counts(msg['message_id']).items():
                 reactions.append(button(safe_text(emoji) + ' ' + str(count), lambda e=emoji: self.toggle_reaction(msg, e), 'flat'))
-            add = button('React', lambda: self.reaction_dialog(msg), 'flat')
-            add.set_sensitive(self.session.ready)
-            reactions.append(add); card.append(reactions)
+            if self.session.store.reaction_counts(msg['message_id']): card.append(reactions)
         outer.append(card)
         return outer
 
@@ -451,6 +527,7 @@ class Window(DailyActions, Adw.ApplicationWindow):
 
     def scrolled(self, adjustment):
         self.focus_bottom = adjustment.get_value() >= adjustment.get_upper() - adjustment.get_page_size() - 30
+        self.latest_button.set_visible('history' in self.session.caps and (self.older or not self.focus_bottom))
         self.read_visible()
 
     def scroll_bottom(self):
@@ -479,7 +556,8 @@ class Window(DailyActions, Adw.ApplicationWindow):
             return
         text = self.text()
         self.send_button.set_sensitive(self.session.ready and bool(text.strip()) and len(text.encode()) <= 32000 and not self.sending)
-        self.send_button.set_label('Sending…' if self.sending else 'Send ↑')
+        self.send_button.set_label('Sending…' if self.sending else 'Send')
+        self.composer_placeholder.set_visible(not text)
         self.hint.set_text('Message limit: 32 KB' if len(text.encode()) > 32000 else
                            (f'{len(self.mention_ids)} mentioned · ' if self.mention_ids else '') + 'Ctrl+Enter to send')
 
@@ -521,11 +599,17 @@ class Window(DailyActions, Adw.ApplicationWindow):
         self.reply_box.set_visible(False)
 
     def dialog(self, title):
-        win = Adw.Window(title=title, transient_for=self, modal=True, default_width=460)
+        win = Adw.Window(title=title, transient_for=self, modal=True, default_width=480)
+        win.add_css_class('apron-dialog')
+        layout = box(True, 0)
+        header = Adw.HeaderBar(); header.add_css_class('flat')
+        header.set_title_widget(label(title, 'dialog-title'))
+        layout.append(header)
         root = box(True, 16, 24)
-        heading = label(title, 'title-1')
-        root.append(heading)
-        win.set_content(root)
+        root.add_css_class('dialog-content')
+        scroll = Gtk.ScrolledWindow(propagate_natural_height=True, max_content_height=600, hscrollbar_policy=Gtk.PolicyType.NEVER)
+        scroll.set_child(root); layout.append(scroll)
+        win.set_content(layout)
         return win, root
 
     def connect_dialog(self):
@@ -537,8 +621,9 @@ class Window(DailyActions, Adw.ApplicationWindow):
         for title, widget in [('Server address', url), ('Display name', name), ('Bearer token', token)]:
             root.append(label(title, 'author')); root.append(widget)
         error_label = label('', 'warning', True); root.append(error_label)
-        actions = box()
-        actions.append(button('Cancel', win.close))
+        actions = box(spacing=8)
+        actions.set_halign(Gtk.Align.END); actions.add_css_class('dialog-actions')
+        actions.append(button('Cancel', win.close, 'flat'))
         if self.session.wanted:
             actions.append(button('Disconnect', lambda: (self.session.disconnect(), win.close())))
         def connect():

@@ -9,24 +9,39 @@ from .model import safe_text
 class DailyActions:
     def menu(self, items, title='More actions'):
         from .app import box, button
-        control = Gtk.MenuButton(label='⋯', tooltip_text=title)
+        control = Gtk.MenuButton(icon_name='view-more-symbolic', tooltip_text=title)
+        control.add_css_class('flat')
+        control.set_always_show_arrow(False)
+        control.update_property([Gtk.AccessibleProperty.LABEL], [title])
         def populate(menu_button, *_):
             popover = Gtk.Popover()
             content = box(True, 4, 8)
-            for name, action, enabled in items:
+            for name, action, enabled in (items() if callable(items) else items):
                 def invoke(action=action):
                     popover.popdown(); action()
                 item = button(name, invoke, 'flat')
                 item.set_sensitive(enabled)
                 content.append(item)
             popover.set_child(content)
+            if title == 'Message actions':
+                def shown(*_): self.message_menu_open = True
+                popover.connect('show', shown)
             menu_button.set_popover(popover)
+            def closed(*_):
+                if title == 'Message actions':
+                    self.message_menu_open = False; self.queue_render()
+                def release():
+                    if menu_button.get_popover() == popover and not popover.get_visible():
+                        menu_button.set_popover(None)
+                    return False
+                GLib.idle_add(release)
+            popover.connect('closed', closed)
         control.set_create_popup_func(populate)
-        control.set_size_request(40, 36)
+        control.set_size_request(36, 36)
         return control
 
     def submit_dialog(self, win, root, method, params, success=lambda result: None, guard=lambda: None, title='Save'):
-        from .app import label, button
+        from .app import label, button, box
         generation = self.session.generation
         error_label = label('', 'warning', True)
         root.append(error_label)
@@ -52,8 +67,10 @@ class DailyActions:
                 win.close(); self.queue_render()
             self.session.request(method, payload, done)
         control = button(title, submit, 'suggested-action')
-        root.append(control)
-        root.append(button('Cancel', win.close))
+        footer = box(spacing=8)
+        footer.set_halign(Gtk.Align.END); footer.add_css_class('dialog-actions')
+        footer.append(button('Cancel', win.close, 'flat')); footer.append(control)
+        root.append(footer)
         return control
 
     def confirm_action(self, title, description, method, params, success=lambda _: None, guard=lambda: None):
@@ -73,6 +90,8 @@ class DailyActions:
         own = msg.get('from', {}).get('user_id') == self.session.store.you.get('user_id')
         editable = self.session.ready and 'edit' in self.session.caps and own and not msg.get('deleted')
         return self.menu([
+            ('Reply', lambda: self.set_reply(msg), not msg.get('deleted')),
+            ('React…', lambda: self.reaction_dialog(msg), self.session.ready and 'reactions' in self.session.caps and not msg.get('deleted')),
             ('Copy text', lambda: self.get_display().get_clipboard().set(safe_text(msg.get('body', {}).get('text', ''))), not msg.get('deleted')),
             ('Copy message ID', lambda: self.get_display().get_clipboard().set(msg['message_id']), True),
             ('Start a thread', lambda: self.room_editor(parent=msg['room_id'], reply=msg), self.session.ready and 'rooms' in self.session.caps),
@@ -242,11 +261,12 @@ class DailyActions:
         win, root = self.dialog('Your profile')
         root.append(label('@' + safe_text(self.session.store.you.get('user_id', '')), 'dim-label'))
         name = Gtk.Entry(text=safe_text(self.session.store.you.get('name', '')), placeholder_text='Display name')
-        root.append(name)
+        root.append(label('Display name', 'author')); root.append(name)
         statuses = ['online', ''] + [s for s in self.session.server.get('status', []) if s in ('dnd','invisible')]
         status = Gtk.DropDown.new_from_strings([{'online':'Online', '':'No status', 'dnd':'Do not disturb', 'invisible':'Invisible'}[s] for s in statuses])
         status.set_selected(statuses.index(self.session.store.you.get('status', 'online')) if self.session.store.you.get('status', 'online') in statuses else 0)
-        if 'status' in self.session.caps: root.append(status)
+        if 'status' in self.session.caps:
+            root.append(label('Presence', 'author')); root.append(status)
         def params():
             p = {'name': name.get_text()}
             if 'status' in self.session.caps: p['status'] = statuses[status.get_selected()]
@@ -270,7 +290,11 @@ class DailyActions:
         notifications = Gtk.CheckButton(label='Notify about mentions while this window is inactive', active=self.preferences.data.get('notifications', False))
         secure = Gtk.CheckButton(label='Save session tokens in the system keyring', active=self.preferences.data.get('secure_session', False))
         secure.set_sensitive(self.keyring.available)
-        root.append(remember); root.append(notifications); root.append(secure)
+        for toggle in (remember, notifications, secure):
+            child = toggle.get_child()
+            if isinstance(child, Gtk.Label):
+                child.set_wrap(True); child.set_max_width_chars(40); child.set_xalign(0)
+            root.append(toggle)
         root.append(label('Drafts, messages, and read markers are not saved. Notification text omits message content. Tokens are saved only when keyring storage is enabled; no plaintext file fallback exists. A Secret Service provider must be installed and unlocked.', 'dim-label', True))
         error_label = label('', 'warning', True); root.append(error_label)
         def save():
@@ -279,10 +303,13 @@ class DailyActions:
             except OSError:
                 error_label.set_text('Could not save preferences. Check the configuration-directory permissions.'); return
             self.apply_theme(); self.save_secure_session(); win.close()
-        root.append(button('Save preferences', save, 'suggested-action'))
+        from .app import box
+        footer = box(spacing=8); footer.set_halign(Gtk.Align.END); footer.add_css_class('dialog-actions')
+        footer.append(button('Cancel', win.close, 'flat'))
+        footer.append(button('Save preferences', save, 'suggested-action'))
         if self.keyring.available and self.session.url:
             root.append(button('Forget saved session for this server', lambda: (secure.set_active(False), self.forget_secure_session(self.session.url, lambda value, error: error_label.set_text(error or 'Stored session removed. Current connection remains open.')))))
-        root.append(button('Cancel', win.close))
+        root.append(footer)
         win.present()
 
     def apply_theme(self):
@@ -292,7 +319,7 @@ class DailyActions:
     def shortcuts_dialog(self):
         from .app import label, button
         win, root = self.dialog('Keyboard shortcuts')
-        for text in ['Ctrl+K — Find a room', 'Ctrl+F — Search loaded messages', 'Ctrl+L — Focus composer', 'Ctrl+Enter — Send', 'Alt+Up — Open parent thread room', 'Alt+N — Next unread room', 'Escape — Cancel reply', 'Tab / Shift+Tab — Move between controls']:
+        for text in ['Ctrl+K — Find a room', 'Ctrl+F — Search loaded messages', 'Ctrl+L — Focus composer', 'Ctrl+Page Up / Down — Earlier / latest messages', 'Shift+F10 — Actions for the focused message', 'Ctrl+Enter — Send', 'Alt+Up — Open parent thread room', 'Alt+N — Next unread room', 'Escape — Cancel reply', 'Tab / Shift+Tab — Move between controls']:
             root.append(label(text))
         root.append(button('Close', win.close)); win.present()
 

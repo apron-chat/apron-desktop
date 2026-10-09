@@ -1,4 +1,4 @@
-# Verification — 2026-10-09, daily-chat milestone
+# Verification — 2026-10-09, native design pass
 
 All network testing used synthetic data on dedicated loopback listeners. No
 production service, real credential, bot process/state, or real chat content
@@ -23,10 +23,17 @@ on its own `feat/native-wayland` branch. No push, merge, or deployment occurred.
   stale-snapshot refusal, reconnect during an open editor and refusal to save
   in the changed connection, profile update, loaded-cache search, room details,
   preferences cancel, lazy native message menu, and actual clipboard readback.
-- Python syntax compilation and wheel build passed. Screenshots were captured
-  from GTK rendering and visually reviewed. An initial compact-header overflow
-  was fixed by moving New thread into the Room dialog at compact widths.
-  Reply now has a text label and larger target; metadata is 12px and darker.
+- **Design regression flow passed at both 1280×900 and 640×900** on real GTK:
+  light/dark surfaces, keyboard-focused message actions, repeated lazy menus,
+  incoming snapshot while a contextual menu is open, older/latest shortcuts,
+  profile/preferences forms, empty/loading states, disabled disconnected actions,
+  retained unsent draft, and capability refresh after reconnect.
+- Python syntax compilation, `git diff --check`, and wheel build passed.
+  Actual GTK screenshots were visually inspected at desktop and compact sizes,
+  including dark theme, focus disclosure, forms and empty state. Captures are
+  included under `docs/design/`; prior previews are in `docs/design-before/`.
+  Screenshot capture retries bounded frame readiness after focus transitions;
+  it does not edit or synthesize the rendered images.
 
 ## Coverage details
 
@@ -63,6 +70,7 @@ See README for installing dependencies and starting the fixture. Then:
 ```sh
 python -m unittest discover -s tests -p 'test_*.py' -v
 GDK_BACKEND=wayland python tests/ui_smoke.py /tmp/apron-preview.png
+GDK_BACKEND=wayland python tests/design_smoke.py /tmp/apron-design
 
 # With the isolated official Go server above running:
 python tests/reference_interop.py
@@ -85,7 +93,9 @@ Weston 14.0.2, markdown-it-py 3.0.0, websockets 15.0.1.
 
 ## Actual efficiency measurement
 
-The latest run used the expanded native UI and official Go server. A separate
+These measurements used the expanded daily-chat UI **before the design pass**
+and the official Go server. Performance has not been remeasured after the
+visual changes. A separate
 public room contained 1,000 synthetic messages of 1,045 text bytes each. The
 client opened its latest 50-record page and ten older pages. Record limits
 include membership changes, so a page need not contain exactly 50 messages.
@@ -109,7 +119,7 @@ GLib's blocking main loop, process CPU time and `/proc/self/status` RSS, excludi
 server/compositor resources. The initial benchmark incorrectly expected 50
 messages rather than 50 log records; that harness assertion was corrected.
 
-Raw current results: `docs/benchmark.json`. Before avoiding the redundant
+Raw pre-design results: `docs/benchmark.json`. Before avoiding the redundant
 nonempty-page rebuild at loading start, pages took 988–1,362 ms, with a 738.7-ms
 worst heartbeat interval (`docs/benchmark-before.json`). Message menus are now
 created lazily. These changes reduced page-load work, but **long main-thread

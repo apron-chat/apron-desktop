@@ -45,7 +45,7 @@ not every policy or browser edge case of the web implementation.
 | Markdown/code/tables (behavior formatting) | Partial | CommonMark → restricted Pango; common formatting, inert links/media. Rich tables and interactive links absent. |
 | Commands (`commands.ts`, behavior commands) | Missing | Slash text remains ordinary text. Need capability-aware command controls and scoped notices. |
 | Appearance (`PreferencesDialog`, behavior appearance) | Partial | System/light/dark via libadwaita; no custom typography/size/sliders. |
-| Responsive panels/accessibility (behavior panels) | Partial | GTK focus, selectable text, larger labeled Reply, adaptive sidebar; no formal assistive-tech audit or resizable member panel. |
+| Responsive panels/accessibility (behavior panels) | Partial | GTK focus, selectable text, hover/focus-disclosed labeled Reply, keyboard context menus, adaptive sidebar and consistent native forms; no formal assistive-tech audit or resizable member panel. |
 | Browser installation/update prompt (behavior PWA) | Intentionally different | Native desktop entry/icon and Nix packaging; distribution/package manager owns updates. |
 
 ## Current milestone and next work

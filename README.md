@@ -73,6 +73,17 @@ scripts/local-env.sh /usr/bin/python3 scripts/demo_server.py
 scripts/local-env.sh /usr/bin/python3 -m apron_native.app --demo
 ```
 
+## Interface
+
+The conversation has one clear header and composer. Account settings live in
+the sidebar account menu; room details, members and thread creation live in the
+header room menu. Reply and message actions appear on hover or keyboard focus;
+right-click, Menu, or Shift+F10 also opens message actions. Existing reactions
+remain visible. History controls appear only when relevant.
+
+See [DESIGN.md](DESIGN.md) for the visual system, before/after captures, and
+light, dark, compact, dialog and interrupted-connection previews.
+
 ## What works
 
 - Actual asynchronous WebSocket connection with TLS through libsoup, protocol
@@ -109,7 +120,8 @@ scripts/local-env.sh /usr/bin/python3 -m apron_native.app --demo
 - Adaptive sidebar below 760px; selectable message text; native focus behavior.
   `Ctrl+K` finds rooms, `Ctrl+F` searches loaded messages, `Ctrl+L` focuses the
   composer, `Ctrl+Enter` sends, `Alt+Up` opens the parent, `Alt+N` finds the next
-  unread room, and `Escape` cancels a reply. **?** lists shortcuts. Enter in a room list activates it.
+  unread room, and `Escape` cancels a reply. `Ctrl+PageUp` loads older history and `Ctrl+PageDown` returns to latest.
+  The account menu lists shortcuts. Enter in a room list activates it.
 
 ## Bounds and architecture
 
@@ -160,7 +172,8 @@ idle sample. The latest benchmark page took 503 ms; ten older pages took
 506–599 ms (median 526 ms). Only 50 messages were rendered, with 591 messages
 and about 664 KiB of serialized data cached across rooms.
 
-These are one-run warm-loopback measurements, not hardware-independent targets.
+These measurements precede the visual design pass; performance was not
+remeasured after it. They are one-run warm-loopback measurements, not hardware-independent targets.
 They exclude server/compositor CPU and memory. Idle behavior is encouraging,
 but long-message pages still caused a **548 ms worst event-loop interval**:
 row virtualization/incremental layout is needed before calling heavy-history
@@ -176,6 +189,7 @@ Start the **local fixture only**, then run:
 python -m unittest discover -s tests -p 'test_*.py' -v
 # With a Wayland compositor running and the fixture still running:
 GDK_BACKEND=wayland python tests/ui_smoke.py /tmp/apron-preview.png
+GDK_BACKEND=wayland python tests/design_smoke.py /tmp/apron-design
 ```
 
 The fixture binds only `127.0.0.1:18765`, uses fictional people/messages, keeps
