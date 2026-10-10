@@ -25,8 +25,8 @@ for i in range(1, 76):
                      'from': ADA if i % 2 else NOOR, 'body': {'text': f'Local fixture note {i:02}: making space for focused conversations.', 'format': 'plain'}})
 examples = [
     (ADA, 'A small place for big ideas.\nWelcome to the local Apron demo — everything here is fictional.', []),
-    (NOOR, 'The native client is coming together. **GTK4**, a quiet sidebar, and a composer that stays out of the way.', []),
-    (ADA, 'A few details to try:\n- Open a room or thread\n- Load an older page\n- Reply with Ctrl+Enter\n\nNo accounts or external services needed.', []),
+    (NOOR, 'The native client is coming together: a calmer message view, a quiet sidebar, and a composer that stays out of the way.', []),
+    (ADA, 'A few details to try:\n- Find a room with Ctrl+K\n- Right-click a message to reply\n- Send with Ctrl+Enter\n\nNo accounts or external services needed.', []),
     (YOU, 'Feels right at home on Wayland. The keyboard shortcuts are a nice touch.', []),
     (NOOR, '@demo_you what do you think of the thread layout? I left a space for the discussion below.', ['demo_you']),
 ]
@@ -101,6 +101,10 @@ async def handler(ws):
             elif method == 'room_join':
                 joined.add(p['room_id'])
                 await send({'method': 'room_update', 'params': {'joined': [record(ROOMS[p['room_id']])]}})
+            elif method == 'room_set' and p.get('room_id') in ROOMS:
+                joined.add(p['room_id'])
+                await send({'method': 'room_update', 'params': {'joined': [record(ROOMS[p['room_id']])]}})
+                result = {'room_id': p['room_id']}
             elif method == 'room_set':
                 COUNTER += 1
                 new_id = str(COUNTER)

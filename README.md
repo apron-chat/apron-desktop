@@ -1,304 +1,226 @@
-# apron-gtk
+# Apron GPUI
 
-A working native Linux client for **Apron protocol 8**, built with Python,
-GTK4, libadwaita, and libsoup 3. Native Wayland widgets; no Electron, WebView,
-HTTP polling, or browser runtime. This is an early vertical slice, not a
-complete replacement for apron-web. See [FEATURE_PARITY.md](FEATURE_PARITY.md)
-for the source-reviewed functional matrix and remaining work.
+A standalone Rust/GPUI Kit client for Apron 8, with a virtualized conversation
+view, selectable Markdown, room/thread navigation, replies, session token sign-in,
+mentions, image/file transfers, contextual editing and opt-in private drafts.
+This branch contains only the GPUI implementation. The GTK implementation remains
+an independent alternative in [PR #1](https://github.com/apron-chat/apron-gtk/pull/1).
+There is no GTK or Python application runtime/build dependency; Python is used
+only by optional synthetic test tools. Full apron-web parity remains deferred.
 
-![Native Wayland preview](docs/preview.png)
+![Native Wayland preview using fictional messages](docs/preview.png)
 
-The application, command and package are named **apron-gtk**. Python modules use
-`apron_gtk`; the desktop/Wayland application ID is `chat.apron.Gtk`.
+## Build and launch on NixOS / niri
 
-Existing installations retain their saved data: if the new configuration
-directory does not exist, apron-gtk reuses `~/.config/apron-native` (under
-`$XDG_CONFIG_HOME` when set). New installs use `~/.config/apron-gtk`.
-`APRON_GTK_STATE_DIR` overrides both; the old `APRON_NATIVE_STATE_DIR` remains a
-fallback. The existing Secret Service schema is deliberately retained so saved
-tokens remain discoverable. No credentials are copied to a file. Historical
-benchmark logs and before-design screenshots retain the former name.
-
-## Run on NixOS / niri
-
-The flake pins nixpkgs to an exact revision and supplies the Python interpreter,
-GTK4, libadwaita, libsoup, introspection data, desktop launcher, and icon.
+From the repository root:
 
 ```sh
-# From an extracted source archive (path: also avoids Git's untracked-file filtering)
-nix run path:.                         # connection dialog; no automatic remote connection
-nix develop path:.
-python scripts/demo_server.py          # terminal 1; fictional loopback-only server
-GDK_BACKEND=wayland python -m apron_gtk.app --demo  # terminal 2, in the dev shell
-
-# Build/install
-nix build path:.
-nix profile install path:.
+nix develop
+cargo build --release --locked
+./target/release/apron-gpui --server wss://YOUR_APRON_HOST/ws
 ```
 
-After installation, launch **apron-gtk** from your application launcher. For niri,
-an optional binding is `Mod+A { spawn "apron-gtk"; }` in the existing `binds`
-block. It is an ordinary toplevel Wayland window with app ID `chat.apron.Gtk`;
-it needs no XWayland or compositor-specific plugin. `GDK_BACKEND=wayland` can
-force Wayland if troubleshooting backend selection. GTK follows the system's
-appearance and scaling settings.
+Launch inside your existing niri session, with `WAYLAND_DISPLAY` and
+`XDG_RUNTIME_DIR` inherited. GPUI uses native Wayland and Vulkan; enable the normal
+NixOS graphics driver configuration for your GPU. The app ID is
+`chat.apron.GpuiExperiment`. No XWayland or browser is required. For file pickers,
+configure your normal `xdg-desktop-portal` backend for niri. Missing portal support
+is reported in the UI. Hardware GPU, actual niri, IME, and screen-reader behavior
+have not been verified in this workspace.
 
-**Nix status:** Nix 2.26.3 parsed the flake and passed `nix flake check
---no-build --all-systems`, evaluating packages, apps and development shells for
-x86_64-linux and aarch64-linux. `flake.lock` records the pinned source hash.
-Validation used an isolated temporary store without system changes. Package
-builds and an actual niri launch remain unverified; native UI tests used Weston/Wayland.
+The flake pins nixpkgs and evaluates on x86_64-linux and aarch64-linux. It is a
+**development shell**, not a fully built Nix package. Cargo.lock and
+rust-toolchain.toml pin dependencies and Rust 1.99.0; rustup downloads that
+compiler on first use. The shell includes Python with websockets for the synthetic fixture and wl-clipboard for native clipboard verification. GPUI Kit 0.7.1 depends on gpui-pre 0.3.8. Rust 1.94 was
+insufficient for this dependency snapshot (`std::hint::cold_path`). No patches or
+RUSTC_BOOTSTRAP are used. A clean Nix build and aarch64 compilation remain unrun.
 
-## Run without Nix
+On another Linux distribution supply Rust 1.99, a C/C++ toolchain, pkg-config,
+CMake, Clang/libclang, fontconfig/freetype, Wayland, libxkbcommon (including X11),
+Vulkan loader and drivers, and X11 development libraries required by GPUI's Linux
+build. The `scripts/workspace-env.sh` helper is specific to this workspace's
+extracted local dependencies; normal installations should use the commands above.
 
-Requires Python 3.11+, GTK 4.12+, libadwaita 1.4+, libsoup 3, PyGObject,
-markdown-it-py. The demo additionally needs `websockets` (tested at 15.0.1).
-On Debian 13:
+## Safe local demo
+
+The default address is `ws://127.0.0.1:18765/ws`. From the repository root, run the
+fictional fixture in another terminal (Python with `websockets`):
 
 ```sh
-sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-soup-3.0 \
-  python3-markdown-it python3-websockets
-/usr/bin/python3 scripts/demo_server.py
-# In another terminal, from this directory:
-GDK_BACKEND=wayland /usr/bin/python3 -m apron_gtk.app --demo
+python3 scripts/demo_server.py
 ```
 
-Without `--demo`, enter your server's `wss://` address and either a guest
-name or an existing bearer token. Guest/token must be offered by that server.
-Remote plain `ws://`, URL credentials, and query parameters are rejected.
-`ws://` is allowed only for `localhost`, `127.0.0.1`, and `::1` development.
-Tokens stay in memory by default. **Preferences → Save session tokens in the
-system keyring** is optional and requires libsecret plus an unlocked Secret
-Service provider (for example a configured desktop keyring). Use **Use saved
-session** in the connection dialog to retrieve one; Forget removes it. There
-is no plaintext file fallback. The native keyring adapter is implemented, but
-actual service operation was not testable in this environment. Message history is never written to disk. Drafts/read markers stay in memory
-unless **Preferences → Save drafts and read markers on this device** is enabled. Connection/name and appearance
-preferences can be remembered separately. Do not use a real token for tests.
+Then run `./target/release/apron-gpui` from the repository root. There are no embedded tokens,
+accounts, or production messages. The fixture’s documented token
+`local-fixture-token` is synthetic and works only with the loopback fixture. Use
+`wss` for remote connections; cleartext `ws` is restricted to loopback addresses.
+The address is supplied at launch, not through an in-app settings dialog.
 
-In the supplied workspace, native dependencies were extracted under `.deps`
-because system directories are read-only. This **workspace-only** launcher
-uses them; `.deps` is intentionally omitted from source downloads:
+## Implemented scope
 
-```sh
-scripts/local-env.sh /usr/bin/python3 scripts/demo_server.py
-scripts/local-env.sh /usr/bin/python3 -m apron_gtk.app --demo
-```
+- Apron 8 handshake, guest and token auth, room listing/joining, room/thread navigation.
+  The conversation menu opens **Sign in with token…**. Tokens and rotated/resume
+  tokens stay in RAM; there is no token file, CLI token argument or automatic guest
+  fallback after rejection. The masked field and its undo history are cleared on
+  submission. Transport secrets are redacted in Debug and zeroized when dropped;
+  UI/network buffers are not promised to be fully zeroized. Restarting requires
+  signing in again. Changing sessions explicitly clears drafts and selected files.
+- Latest/older history pages of 50. Older pages reconcile edits/deletes/moves against
+  a frozen log horizon with a finite 128-page budget. Stale room responses are discarded.
+- Shared bounded state (2,000 messages / 8 MiB serialized message data), 2 MiB frame
+  limit, virtualized variable-height rows and stable IDs. Caps do not represent
+  total process memory: parsed JSON, text layout, renderer and GPU have overhead.
+- Markdown text sending, reply references, RAM drafts per room, Ctrl+Enter to send,
+  Ctrl+PageUp for older history, Ctrl+PageDown for latest, Escape to cancel a reply, Ctrl+B to toggle navigation.
+  The sidebar automatically hides below 900 px until manually toggled; timestamps
+  use the local timezone and cached replies include a readable excerpt.
+  Connection state stays visible in the header when navigation is hidden.
+  Ctrl+K opens/focuses room filtering. Threads sort beside their parent; the list
+  filters local room IDs/titles, not remote message history. Live room rename/leave
+  deltas update the index. Minimum window is 640×480; cramped panes move history
+  controls into the menu and omit the composer hint to preserve the Send action.
+- Contextual message actions: right-click, or Tab to a row’s ellipsis and press
+  Enter. Reply/Copy labels no longer repeat on every row. Menus support arrows,
+  Enter and Escape. With message actions focused, R replies and Ctrl+Shift+C
+  copies the whole message. The conversation menu includes keyboard help.
+- Session-local unread/mention counts (up to 2,000 pending messages across 256
+  rooms), using server mention IDs, not text matching. Only a focused window at
+  the conversation tail automatically marks messages read. Reading earlier history
+  preserves unread state. Ctrl+Shift+U marks the room read; the unread header action
+  jumps to the first retained unread message. Read activity is best-effort and only
+  sent when supported. Own activity broadcasts advance local cursors.
+  Saved cursors reconcile fetched history on reconnect/room entry. A fresh profile
+  starts at its first fetched page. Counts cover received/fetched evidence, not all
+  unfetched offline rooms; bounds can discard the oldest pending entries.
+- Selectable rendered Markdown, Ctrl+C selection and explicit whole-message Copy.
+  Headings, emphasis, lists, quotes and code render natively. Raw HTML and Markdown
+  images are removed and links are inert; no automatic media requests. Outgoing
+  text uses Markdown; Preview shows the sanitized result before sending.
+- Type @ and select a supplied room member using arrows/Enter or a click. The
+  Notifies chips show explicit protocol recipients; typing a display name alone
+  never guesses a recipient. Completion supports up to 512 supplied members, six
+  matches, 32 selected recipients, and whitespace-free IDs up to 128 bytes.
+  Incoming protocol mentions have a textual @ You label and a next-unread-mention action.
+- Own messages expose Edit/Delete when the server advertises edit. Edits retain
+  body metadata, embeds and the reply reference. Delete requires a dialog action.
+  Stale cached targets are rejected; server permission errors preserve the editor.
+  Uncertain changes are never retried automatically.
+- One to four chosen regular files, at most 8 MiB total; explicit same-origin
+  upload/download, no redirects or auth forwarding. Downloads use a private
+  temporary file and refuse to overwrite an existing destination. A local commit
+  already begun can finish after cancellation. Transfers run independently of
+  WebSocket heartbeats. Ctrl+V/Shift+Insert accepts native PNG/JPEG/WebP/GIF/BMP
+  images, normalizes them to PNG in a worker, and shows removable previews. Paste
+  never sends. Embedded upload images require an explicit same-server Load action.
+  Raster limits: 4096 pixels per side, eight million pixels, 64 MiB decoder budget;
+  eight cached thumbnails, each at most 640×480. SVG is rejected; animation uses
+  its first frame. Metadata is removed during normalization. Drag/drop is deferred.
+- Bounded event channels, protocol heartbeat, exponential reconnect, explicit errors.
+  Uncertain sends are not automatically retried. Reconnect uses the latest returned
+  session token, including guest tokens, preserving identity where supported.
+  Authentication rejection waits for explicit action; a network loss during auth
+  reconnects with a generic error that cannot echo token input.
 
-## Interface
+**Deferred:** email/OAuth/account creation, keyring token storage, complete offline unread recovery,
+notifications, room creation/moderation, reactions, presence/typing, settings,
+remote message search, WYSIWYG compose, active external links, drag/drop,
+full apron-web feature parity.
+Room lists and draft count are capped at 256; room-list pagination is not implemented.
 
-The conversation has one clear header and composer. Account settings live in
-the sidebar account menu; room details, members and thread creation live in the
-header room menu. Reply and message actions appear on hover or keyboard focus;
-right-click, Menu, or Shift+F10 also opens message actions. Existing reactions
-remain visible. History controls appear only when relevant.
+The transport owns its own Tokio runtime; GPUI awaits events without busy polling.
+CPU timers in `--smoke` and `--benchmark` exist only in opt-in test modes.
 
-See [DESIGN.md](DESIGN.md) for the visual system, before/after captures, and
-light, dark, compact, dialog and interrupted-connection previews.
+## Local data and privacy
 
-## Local data and recovery
+Conversation menu → **Local data** enables draft/read-cursor persistence for the
+current server/user. It is off by default. It stores draft text, reply IDs, selected
+mention IDs and read cursors; never tokens, message history or attachments. Files
+are unencrypted, private (0600, directory 0700), atomic, and keyed by a hash of the
+server/user. Location: `$XDG_STATE_HOME/apron-gpui` (default `~/.local/state/apron-gpui`).
+Limits: 256 rooms, 32,000 bytes per draft, 256 KiB draft text, 512 KiB per profile,
+16 profiles. Errors are visible; drafts over limits are not silently truncated.
+Disable erases the saved copy while retaining current drafts; Reset also clears
+this session's drafts and selected files. Debounced writes and reset share an
+ordered worker. Normal exit flushes; an abrupt kill can lose the latest changes.
+Concurrent app instances for the same profile are not coordinated (last writer
+wins). Guest identity survives reconnect in memory; after a full restart, sign in
+as the same user to recover that profile. No plaintext bearer token is persisted.
 
-Local draft/read storage is **off by default**. When enabled, it stores plaintext
-composers (including reply IDs and mention IDs) and read cursors in
-`$XDG_CONFIG_HOME/apron-gtk/local-state.json` (normally `~/.config/apron-gtk/`).
-Each profile is keyed by the exact validated server URL and authenticated user
-ID. A new guest identity cannot inherit another identity's drafts. No tokens,
-received messages, or room/member lists enter this file.
+GPUI's upstream Wayland clipboard reader buffers an offered clipboard payload
+before returning it to the application. The app enforces its byte/pixel limits
+after that read; this is **not a pre-read memory bound** against a malicious local
+clipboard owner. HTTP transfers and raster decoding have separate explicit bounds.
+Image upload creates the message before transferring bytes. On failure/cancel,
+inspect the posted message before retrying; the app does not automatically repost.
+Clipboard previews are session-only and clear when switching rooms.
 
-Storage is capped at 1 MiB total and 8 profiles, 256 rooms per profile, 32,000
-UTF-8 bytes per draft and 768 KiB of drafts per profile. Older saved data is
-evicted to stay within these limits. Writes coalesce after 750 ms of changes,
-run on one worker, use atomic replacement with mode 0600 and fsync, and flush on
-normal close. A crash can lose changes in the debounce interval. Concurrent
-client instances use last-writer-wins files; cross-process merging is not supported.
-
-Disabling storage deletes the saved file. **Reset local drafts and read markers…**
-asks for confirmation, disables storage, clears current drafts/read markers and
-queues deletion for every saved server/profile. It does not delete server
-messages, preferences or keyring tokens. Use the separate keyring Forget action
-for saved authentication. Filesystem deletion cannot erase backups or guarantee
-secure physical erasure.
-
-History remains bounded in RAM. An older page is replayed forward to its captured
-log horizon before display, covering later edits, deletes, moves and reactions.
-Only the selected page's projection is held during this scan. Opened rooms also
-recover available unread/mentions from a known read cursor on latest/reconnect;
-recovered history never emits desktop notifications. Each scan allows at most
-128 sequential 50-record requests. Expired history or the scan budget produces
-an explicit warning; an unverifiable older page is not committed. This is not
-a durable full-room log cache or background recovery of every room.
-
-## Typing, presence and attachments
-
-Typing uses `activity`: 15-second indicators, refreshed at most once every
-12 seconds during user edits, stopped after a five-second pause or room switch.
-Programmatically restored drafts do not announce typing. Incoming indicators
-expire locally and stop on a message; the map is capped at 256 participants.
-
-With `status`, five minutes without input to this window reports idle; input
-returns it to attended. A connection starting unattended reports that state.
-Older servers rejecting numeric idle get a boolean fallback for that connection.
-The account menu and room menu expose notification mutes: 15 minutes, one hour,
-until unmuted, or unmute. Server notifications determine the stored mute state.
-Global/parent-room mutes and Do Not Disturb suppress local mention notifications.
-These settings remain server-owned; there is no new background polling loop.
-
-With `embed:upload`, the composer attachment icon opens a native multiple-file
-chooser, then a confirmation with an editable caption and optional current reply.
-Join the room first. Choose up to **four files, 8 MiB total**. The confirmation
-starts with the current draft and mentions; one message is posted, then each
-returned single-use `write_url` receives an HTTP PUT in request order. The
-unchanged composer clears only after the message is accepted; newer edits stay.
-A failed/cancelled upload stops the remaining batch and reports how many files
-completed. Text may already be posted even if an upload fails. Nothing is
-retried automatically; inspect the message before posting again.
-
-Received uploads show pending metadata or **Save attachment…**. Saving requires
-an explicit destination and downloads at most 8 MiB. Nothing is opened or
-executed automatically. Transfers allow only the connected server's HTTP(S)
-origin, HTTPS remotely and HTTP for the existing loopback development connection.
-They use a separate HTTP session with no bearer token, cookies, referrer or
-redirect following. Cross-origin/CDN URLs are visibly unsupported even when
-legitimate; this conservative restriction is intentional. The transfer can be
-cancelled and has a two-minute operation timeout. There is no automatic media fetch, inline decoder, audio/video player,
-iframe/HTML renderer, stream viewer, background attachment queue or upload resumption.
-The server may reject a file type/size below the client limit; errors stay visible.
-
-## What works
-
-- Actual asynchronous WebSocket connection with TLS through libsoup, protocol
-  greeting, guest or token authentication, in-memory token rotation, response
-  correlation, 20-second request timeouts, advertised ping/pong, and randomized
-  exponential reconnect backoff (approximately 1–31 seconds).
-- Room directory, thread navigation/discovery, joining a listed room, creating
-  rooms/private rooms/threads, title/description editing, confirmed leave, member
-  listing and exact-ID add/remove, and live room/user/membership updates. No `rooms` capability falls back
-  to the default room, learned from messages.
-- 50-record history requests, older/latest navigation, numeric inclusive log
-  cursors using `first_log_id - 1`, snapshot replacement, moves/tombstones,
-  embedded replies, and retention pruning. No history capability means live
-  scrollback only.
-- Confirmed sends, replies, join-before-send for unjoined rooms, explicit
-  member-picker mentions, per-room drafts,
-  visible errors, and uncertain-delivery feedback. A disconnected send is
-  **never automatically repeated**; check history before sending again.
-- In-session unread counts and explicit mention badges; history does not create
-  notifications. Read markers advance when the active window is at the bottom
-  of the latest page. Own activity cursors from another connection are honored.
-- Message **⋯** menus: native clipboard copy, edit/delete/move your messages,
-  and start a thread from a message. Edits preserve embeds/mentions/replies/ext;
-  stale local editors and changed connections are rejected rather than silently
-  overwriting newer state. Pending dialogs guard repeated submissions.
-- Reaction counts/toggles and a small native picker; history/live replay per user.
-- Profile display-name and advertised status picker. Native light/dark/system
-  appearance and opt-in content-free mention notifications through Gio. Real
-  desktop notification delivery is still unverified in the headless environment.
-- **Find** searches only the bounded loaded-message cache, not all server history.
-- CommonMark formatted text through a restricted Pango renderer; raw HTML is
-  escaped, images/embeds have text fallbacks; attachment downloads require an explicit Save action.
-  Links are displayed as text and do not execute or open automatically.
-- Adaptive sidebar below 760px; selectable message text; native focus behavior.
-  `Ctrl+K` finds rooms, `Ctrl+F` searches loaded messages, `Ctrl+L` focuses the
-  composer, `Ctrl+Enter` sends, `Alt+Up` opens the parent, `Alt+N` finds the next
-  unread room, and `Escape` cancels a reply. `Ctrl+PageUp` loads older history and `Ctrl+PageDown` returns to latest.
-  The account menu lists shortcuts. Enter in a room list activates it.
-
-## Bounds and architecture
-
-`model.py` is a GTK-independent state reducer. `session.py` owns libsoup and
-request/timer lifecycles on the GLib main context. `recovery.py` performs bounded
-fixed-horizon scans; `local_state.py` validates and asynchronously persists
-optional draft/read state. `app.py` builds native GTK
-widgets, reuses unchanged rows and creates at most two new rows per 16-ms batch; `ui_actions.py` owns dialogs, `actions.py` preserves
-message fields, `preferences.py` persists allowlisted non-secret settings, and
-`keyring.py` delegates credentials exclusively to Secret Service. `render.py` converts CommonMark to an allowlisted
-Pango subset. No worker polling loop is used.
-
-At most 50 messages are rendered; the shared snapshot cache is capped at
-2,000 records **and 8 MiB of serialized message data**, with LRU eviction.
-There are at most 256 room records, 2,048 current users, 256 drafts, 64 pending
-requests, and 256 KiB per incoming WebSocket frame. Badges cap at 999. GTK and
-Python overhead is additional to the serialized cache budget. UI text is
-bounded and control/bidi override characters are removed for display.
-
-## Deliberate limitations
-
-- This is not full protocol conformance. Passkeys, email sign-in, durable
-  chat/session-cache recovery, multiple simultaneous accounts, rich interactive embeds,
-  bulk message operations, commands, calls, and server push are
-  deferred. The keyring adapter and Gio notifications require real desktop-service
-  validation; they are not yet verified end to end. The public Apron demo may permit
-  guest reading but require passkeys for writing; use the local fixture or a
-  server that permits guest/token writes for this slice.
-- Reconnect discards the received-message cache, restores eligible local read
-  cursors, and loads the selected room. Forward recovery is bounded to 128 pages
-  per scan, with explicit incomplete/retention feedback. No durable log checkpoint,
-  all-room recovery, or offline message cache is implemented.
-- Room membership state replays, but timeline membership-event grouping,
-  user-ID alias/rename reconciliation, and full live status semantics are incomplete.
-  Unread/mention badges cover newly delivered creations, not mention additions
-  to edits. Room listings over the 256-room cap are truncated.
-- The Markdown renderer preserves common emphasis, headings, lists, code, and
-  quotes, but is not a rich document viewer; links and media remain inert text.
-- Valid TLS certificates are required; there is no “ignore certificate errors”
-  switch. No SSH transport, proxy configuration UI, or background tray mode.
-
-## Measured performance
-
-The prior milestone’s 1,000-message loopback benchmark (1,045 text bytes per message) measured
-**151 ms worst 10-ms heartbeat interval**, down from **502 ms** after the visual
-design pass and **548 ms** in the earlier daily-chat build. Final client RSS was
-**78.5 MiB**, with **0.072% of one CPU core** over a 9.89-second idle sample.
-
-The tradeoff is longer full-page completion: latest 882 ms; ten reconciled older
-pages 825–1,321 ms (median 927 ms). GTK yields between row batches and unchanged
-rows retain identity and scroll position. There are still long frames; this is
-incremental rendering, not viewport virtualization or a frame-time guarantee.
-Measurements are single warm software-rendered Weston runs, not general targets.
-Presence/attachment additions have not been rebenchmarked. See TEST_RESULTS
-and `docs/benchmark-*.json` for method and limitations.
+See [DAILY_USE.md](DAILY_USE.md) for the latest implementation/test matrix and visual review.
 
 ## Verification
 
-Start the **local fixture only**, then run:
+All commands run from the repository root. Python scripts here are optional test
+fixtures, not application modules. To run the four integration tests, build the
+[official Apron server](https://github.com/shazow/apron) separately, then use:
 
 ```sh
-python -m unittest discover -s tests -p 'test_*.py' -v
-# With a Wayland compositor running and the fixture still running:
-GDK_BACKEND=wayland python tests/ui_smoke.py /tmp/apron-preview.png
-GDK_BACKEND=wayland python tests/design_smoke.py /tmp/apron-design
-GDK_BACKEND=wayland python tests/ui_recovery_smoke.py
+python3 scripts/run-loopback-tests.py --aprond /absolute/path/to/aprond
 ```
 
-The fixture binds only `127.0.0.1:18765`, uses fictional people/messages, keeps
-state in memory, and is a test harness rather than a deployable server. Its
-`/test-denied` and `/test-disconnect` message texts deliberately exercise errors.
-Do not expose it to a network or use it with real data.
+The runner refuses occupied test ports, starts its own in-memory server on 18766
+and fictional fixture on 18765, and cleans up only its own child processes. It
+uses temporary upload data. No GTK checkout or helper is required.
+`python3 scripts/seed_reference.py` separately seeds only port 18766 for the native
+benchmark; its output supplies the synthetic room ID.
 
-The official Go reference server was also built and tested separately on
-loopback with synthetic data and `--store memory`; connect/list/history/send/
-reply/thread/reconnect passed. Reproduce using an isolated official server:
 
 ```sh
-# Build apron-server-go, then run its binary in a dedicated test directory:
-aprond --store memory --addr 127.0.0.1:18766 --messages-per-minute 10000 \
-  --upload.dir ./test-uploads
-# From this client, in its Python/native development environment:
-python tests/reference_interop.py
-GDK_BACKEND=wayland python tests/ui_daily_smoke.py /tmp/apron-daily.png
-GDK_BACKEND=wayland python tests/ui_presence_media.py /tmp/apron-presence.png
-python scripts/seed_reference.py > /tmp/apron-benchmark-seed.json
-APRON_BENCH_ROOM=$(python -c 'import json; print(json.load(open("/tmp/apron-benchmark-seed.json"))["room_id"])') \
-  GDK_BACKEND=wayland python tests/benchmark_ui.py
+cargo test --locked --no-default-features
+cargo build --release --locked
+# With only the dedicated synthetic fixture (18765) and official server (18766):
+cargo test --locked --no-default-features --test loopback -- --ignored --nocapture
+# Inside an isolated native Wayland test session:
+./target/release/apron-gpui --smoke /tmp/gpui-smoke.json
+./target/release/apron-gpui --polish-smoke /tmp/gpui-polish.json
+XDG_STATE_HOME=/tmp/apron-native-test-state ./target/release/apron-gpui \
+  --server ws://127.0.0.1:18766/ws --daily-smoke /tmp/gpui-daily.json
+./target/release/apron-gpui --server ws://127.0.0.1:18766/ws \
+  --benchmark SYNTHETIC_ROOM_ID /tmp/gpui-benchmark.json
 ```
 
-These scripts hard-code the dedicated loopback test endpoint. `--server
-ws://127.0.0.1:18766/ws` also opens it in the client as a guest. Never point
-these tests at a server with real content.
+`--smoke` refuses non-fixture addresses. Integration tests use literal loopback
+ports and create only synthetic content. The benchmark is restricted to the official loopback server on 18766 and reads
+an explicitly provided room; use only synthetic benchmark rooms. Set
+`APRON_BENCH_RENDERER` to a verified renderer description when collecting results;
+the harness does not detect the Vulkan device itself. Test logs and measured data
+are included in `docs/`.
 
-See [TEST_RESULTS.md](TEST_RESULTS.md) for actual checks, versions, commands,
-and unrun checks. Screenshots show actual GTK rendering under headless Weston,
-not an HTML mockup. Source references and pinned commits are in
-[references/README.md](references/README.md).
+Headless Weston needs a `wl_seat` for GPUI. `scripts/weston-test-seat.c` is an
+optional test-only module against **Weston 14** exported internal APIs, not part
+of the application or a module to install into your desktop. Build it with
+`cc -shared -fPIC $(pkg-config --cflags libweston-14) scripts/weston-test-seat.c -o
+/tmp/apron-test-seat.so $(pkg-config --libs libweston-14)` and load it only into
+an isolated headless Weston with `--modules=/tmp/apron-test-seat.so`. For the
+inter-process clipboard smoke, start that test compositor with
+`APRON_TEST_SEAT_INPUT=1` and the app with `APRON_VERIFY_CLIPBOARD=1`; install
+`wl-clipboard`. The module issues one harmless modifier press/release after focus
+and then stops. Do not enable it for benchmarks. See the
+comparison report for the actual renderer and test method.
 
-License: MIT; the included protocol reference retains its upstream license.
+## References
+
+- [Apron protocol](https://github.com/shazow/apron/blob/main/PROTOCOL.md)
+- [apron-web](https://github.com/apron-chat/apron-web), reference checkout `fbb3e71a3483544a4bdf7236070cf48e87686377`
+- Official Go reference checkout `067083815be6b113e7d35f6569fa35dee0052fd5`
+- [GPUI](https://gpui.rs/) and [GPUI Kit 0.7.1](https://gpui-kit.com/docs/installation/)
+- [MessageScroller](https://gpui-kit.com/component/message-scroller/),
+  [TextView](https://gpui-kit.com/component/text-view/), and
+  [Textarea](https://gpui-kit.com/component/textarea/) APIs were checked against
+  the actual downloaded source; repository GPUI Kit skills/guides were followed.
+
+## Design and feature review
+
+See [DESIGN_REVIEW.md](DESIGN_REVIEW.md) for the screenshot critique, changes and
+actual native checks, and [FEATURE_PARITY.md](FEATURE_PARITY.md) for implemented
+versus deferred product scope. The GPUI draft PR targets main independently of the GTK alternative. Existing
+history is preserved, but the current tree and source archive contain no GTK client.
+See [STANDALONE.md](STANDALONE.md) for the layout and verification of this change.

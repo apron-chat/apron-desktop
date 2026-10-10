@@ -1,7 +1,0 @@
-dbus-daemon[5102]: [session uid=1000 pid=5102 pidfd=5] Activating service name='org.a11y.Bus' requested by ':1.1' (uid=1000 pid=5103 comm="/usr/bin/python3 apron-native/tests/ui_smoke.py /w" label="kernel")
-dbus-daemon[5102]: [session uid=1000 pid=5102 pidfd=5] Successfully activated service 'org.a11y.Bus'
-dbus-daemon[5115]: Activating service name='org.a11y.atspi.Registry' requested by ':1.0' (uid=1000 pid=5103 comm="/usr/bin/python3 apron-native/tests/ui_smoke.py /w" label="kernel")
-dbus-daemon[5115]: Successfully activated service 'org.a11y.atspi.Registry'
-SpiRegistry daemon is running with well-known name - org.a11y.atspi.Registry
-Screenshot saved: /workspace/apron-native/artifacts/preview-compact.png
-PASS: native Wayland UI, paging, threads, drafts, denied send, confirmed reply, screenshot

@@ -1,9 +1,0 @@
-[Desktop Entry]
-Name=apron-gtk
-Comment=Native conversations on Linux
-Exec=apron-gtk
-Icon=chat.apron.Gtk
-Type=Application
-Categories=Network;Chat;
-StartupNotify=true
-Terminal=false
