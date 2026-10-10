@@ -4,12 +4,12 @@ use apron_gpui::transport::Event;
 use gpui_kit::base::TextSelection;
 use gpui_kit::*;
 use std::time::{Duration, Instant};
-async fn settle(cx: &AsyncWindowContext) {
+pub(crate) async fn settle(cx: &AsyncWindowContext) {
     cx.background_executor()
         .timer(Duration::from_millis(250))
         .await;
 }
-async fn wait(
+pub(crate) async fn wait(
     view: &WeakEntity<Conversation>,
     cx: &mut AsyncWindowContext,
     predicate: impl Fn(&Conversation, &App) -> bool,
@@ -25,7 +25,7 @@ async fn wait(
             .await;
     }
 }
-fn key(key: &str, window: &mut Window, cx: &mut App) {
+pub(crate) fn key(key: &str, window: &mut Window, cx: &mut App) {
     window.dispatch_event(
         KeyDownEvent {
             keystroke: Keystroke::parse(key).unwrap(),
@@ -192,7 +192,7 @@ async fn run(view: WeakEntity<Conversation>, output: String, cx: &mut AsyncWindo
     wait(&view, cx, |v, _| !v.loading && v.room == "general").await;
     eprintln!("Room switches passed");
     view.update_in(cx, |v, window, cx| {
-        v.smoke_reply(id, window, cx);
+        v.begin_reply(id, window, cx);
         v.composer
             .update(cx, |s, cx| s.set_value("Synthetic room draft", window, cx));
     })
@@ -225,7 +225,7 @@ async fn run(view: WeakEntity<Conversation>, output: String, cx: &mut AsyncWindo
         "Synthetic room draft"
     );
     view.update_in(cx, |v, window, cx| {
-        v.smoke_reply(id, window, cx);
+        v.begin_reply(id, window, cx);
         v.composer.update(cx, |s, cx| {
             s.set_value("Synthetic GPUI native workflow", window, cx)
         });

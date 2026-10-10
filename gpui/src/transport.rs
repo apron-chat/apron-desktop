@@ -1,5 +1,6 @@
 //! One Tokio actor owns WebSocket RPC. The UI awaits bounded events, never polls.
 use crate::{
+    auth::Secret,
     media::{self, Attachment},
     model::{MAX_FRAME, PAGE, clean, number, text},
 };
@@ -42,6 +43,10 @@ pub enum Command {
     Join {
         room: String,
     },
+    Read {
+        room: String,
+        through: u64,
+    },
     Reconnect,
     CancelTransfer,
 }
@@ -50,6 +55,7 @@ pub enum Event {
     State(String),
     Ready {
         you: String,
+        authenticated: bool,
         rooms: Value,
         caps: Vec<String>,
     },
@@ -83,6 +89,9 @@ pub struct Bridge {
 }
 impl Bridge {
     pub fn start(url: String) -> Result<Self> {
+        Self::start_with_token(url, None)
+    }
+    pub fn start_with_token(url: String, token: Option<Secret>) -> Result<Self> {
         media::endpoint(&url)?;
         let (tx, rx) = mpsc::channel(16);
         let (etx, erx) = async_channel::bounded(128);
@@ -94,7 +103,7 @@ impl Bridge {
                     .enable_all()
                     .build()
                     .expect("Tokio runtime");
-                runtime.block_on(run(url, rx, etx));
+                runtime.block_on(run(url, token, rx, etx));
             })?;
         Ok(Self {
             commands: tx,
@@ -111,6 +120,14 @@ impl std::fmt::Display for RemoteError {
 }
 impl std::error::Error for RemoteError {}
 
+#[derive(Debug)]
+struct AuthRequired;
+impl std::fmt::Display for AuthRequired {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Sign-in was not accepted. Check your token or choose guest access.")
+    }
+}
+impl std::error::Error for AuthRequired {}
 pub struct Client {
     ws: WebSocketStream<MaybeTlsStream<TcpStream>>,
     next: u64,
@@ -198,6 +215,32 @@ impl Client {
         )
         .await
     }
+    pub async fn authenticate(&mut self, token: Option<&Secret>) -> Result<Value> {
+        let scheme = if token.is_some() { "token" } else { "guest" };
+        if !self.server["auth"]
+            .as_array()
+            .is_some_and(|items| items.iter().any(|v| v == scheme))
+        {
+            return Err(AuthRequired.into());
+        }
+        let result = if let Some(token) = token {
+            self.rpc(
+                "auth",
+                json!({"scheme":"token","token":token.expose(),"agent":"apron-gpui/0.2"}),
+            )
+            .await
+        } else {
+            self.guest().await
+        };
+        // A server error could echo bearer input. Never show or log its body.
+        result.map_err(|error| {
+            if error.downcast_ref::<RemoteError>().is_some() {
+                AuthRequired.into()
+            } else {
+                anyhow::anyhow!("Connection lost during sign-in; reconnecting.")
+            }
+        })
+    }
     pub async fn history(&mut self, room: &str, before: Option<u64>) -> Result<Value> {
         let mut params = json!({"room_id":room,"limit":PAGE});
         if let Some(n) = before {
@@ -261,18 +304,42 @@ async fn emit(tx: &async_channel::Sender<Event>, e: Event) {
 }
 async fn run(
     url: String,
+    mut token: Option<Secret>,
     mut commands: mpsc::Receiver<Command>,
     events: async_channel::Sender<Event>,
 ) {
     let mut delay = 1;
+    let authenticated = token.is_some();
     loop {
         if events.is_closed() || commands.is_closed() {
             return;
         }
         emit(&events, Event::State("Connecting…".into())).await;
-        let result = connected(&url, &mut commands, &events).await;
+        let result = connected(&url, &mut token, authenticated, &mut commands, &events).await;
         if commands.is_closed() || events.is_closed() {
             return;
+        }
+        if result
+            .as_ref()
+            .is_err_and(|e| e.downcast_ref::<AuthRequired>().is_some())
+        {
+            emit(&events, Event::State("Sign-in required".into())).await;
+            emit(
+                &events,
+                Event::Failure {
+                    generation: None,
+                    message: AuthRequired.to_string(),
+                },
+            )
+            .await;
+            loop {
+                match commands.recv().await {
+                    Some(Command::Reconnect) => break,
+                    None => return,
+                    _ => {}
+                }
+            }
+            continue;
         }
         emit(
             &events,
@@ -309,11 +376,16 @@ async fn run(
 }
 async fn connected(
     url: &str,
+    token: &mut Option<Secret>,
+    authenticated: bool,
     commands: &mut mpsc::Receiver<Command>,
     events: &async_channel::Sender<Event>,
 ) -> Result<()> {
     let mut c = Client::connect(url, Some(events.clone())).await?;
-    let auth = c.guest().await?;
+    let auth = c.authenticate(token.as_ref()).await?;
+    if let Some(value) = auth["token"].as_str() {
+        *token = Some(Secret::new(value.to_owned()).map_err(|_| AuthRequired)?);
+    }
     let rooms = c
         .rpc("room_list", json!({"filter":"all","members":true}))
         .await?;
@@ -329,6 +401,7 @@ async fn connected(
         events,
         Event::Ready {
             you: text(&auth["you"]["user_id"]).into(),
+            authenticated,
             rooms,
             caps,
         },
@@ -360,13 +433,21 @@ async fn handle_command(
     transfers: &mut tokio::task::JoinSet<()>,
 ) -> Result<bool> {
     match command {
+        Command::Read { room, through } => {
+            if c.server["capabilities"]
+                .as_array()
+                .is_some_and(|v| v.iter().any(|v| v == "activity"))
+            {
+                c.ws.send(Frame::Text(json!({"method":"activity","params":{"room_id":room,"read_message_id":through.to_string()}}).to_string().into())).await?;
+            }
+        }
         Command::Reconnect => return Ok(false),
         Command::CancelTransfer => {
             transfers.abort_all();
             emit(events,Event::Transfer{message:"Transfer cancelled; message may already be posted. Inspect history before retrying.".into(),busy:false}).await;
         }
         Command::Join { room } => {
-            if let Err(e) = c.rpc("room_set", json!({"room_id":room,"join":true})).await {
+            if let Err(e) = c.rpc("room_join", json!({"room_id":room})).await {
                 emit(
                     events,
                     Event::Failure {

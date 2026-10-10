@@ -244,3 +244,70 @@ mod tests {
         assert_eq!(display_text("*plain*", false), "\\*plain\\*");
     }
 }
+
+/// Apply room-list snapshots and room_update deltas without changing membership on rename.
+pub fn update_rooms(
+    rooms: &mut std::collections::BTreeMap<String, serde_json::Value>,
+    list: &serde_json::Value,
+) {
+    for key in ["joined", "not_joined", "updated"] {
+        if let Some(records) = list[key].as_array() {
+            for room in records.iter().take(256) {
+                if let Some(id) = room["room_id"].as_str().filter(|id| id.len() <= 256) {
+                    let old = rooms.get(id);
+                    if key == "updated"
+                        && old.is_some_and(|old| number(&old["log_id"]) > number(&room["log_id"]))
+                    {
+                        continue;
+                    }
+                    let joined = if key == "updated" {
+                        old.is_some_and(|r| r["_joined"] == true)
+                    } else {
+                        key == "joined"
+                    };
+                    let mut record = room.clone();
+                    record["_joined"] = serde_json::Value::Bool(joined);
+                    rooms.insert(id.into(), record);
+                }
+            }
+        }
+    }
+    if let Some(left) = list["left"].as_array() {
+        for entry in left.iter().take(256) {
+            if let Some(room) = entry["room_id"].as_str().and_then(|id| rooms.get_mut(id)) {
+                room["_joined"] = serde_json::Value::Bool(false);
+            }
+        }
+    }
+    while rooms.len() > 256 {
+        rooms.pop_last();
+    }
+}
+
+#[cfg(test)]
+mod room_tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn room_deltas_preserve_membership_and_reject_stale_rename() {
+        let mut rooms = std::collections::BTreeMap::new();
+        update_rooms(
+            &mut rooms,
+            &json!({"joined":[{"room_id":"r","title":"Before","log_id":"10"}]}),
+        );
+        update_rooms(
+            &mut rooms,
+            &json!({"updated":[{"room_id":"r","title":"After","log_id":"11"},{"room_id":"thread","parent_room_id":"r","title":"New thread","log_id":"12"}]}),
+        );
+        assert_eq!(rooms["r"]["title"], "After");
+        assert_eq!(rooms["r"]["_joined"], true);
+        assert_eq!(rooms["thread"]["_joined"], false);
+        update_rooms(
+            &mut rooms,
+            &json!({"updated":[{"room_id":"r","title":"Stale","log_id":"9"}]}),
+        );
+        assert_eq!(rooms["r"]["title"], "After");
+        update_rooms(&mut rooms, &json!({"left":[{"room_id":"r"}]}));
+        assert_eq!(rooms["r"]["_joined"], false);
+    }
+}

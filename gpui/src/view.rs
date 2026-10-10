@@ -1,12 +1,15 @@
 use apron_gpui::{
+    attention::Attention,
+    auth::Secret,
     media::Attachment,
     model::{self, Message, Store},
     transport::{Bridge, Command, Event},
 };
 use gpui_kit::component::{
-    ActiveTheme, Disableable, Selectable, Sizable,
+    ActiveTheme, Disableable, IconName, Selectable, Sizable, WindowExt,
     button::{Button, ButtonVariants},
-    input::{InputEvent, Textarea, TextareaState},
+    input::{Input, InputEvent, InputState, Textarea, TextareaState},
+    menu::{ContextMenuExt, DropdownMenu, PopupMenu},
     message_scroller::{MessageScroller, MessageScrollerState},
     text::TextView,
 };
@@ -16,7 +19,19 @@ use std::{collections::BTreeMap, rc::Rc, sync::Arc, time::Duration};
 
 actions!(
     apron,
-    [SendMessage, LoadOlder, Latest, CancelReply, ToggleRooms]
+    [
+        SendMessage,
+        LoadOlder,
+        Latest,
+        CancelReply,
+        ToggleRooms,
+        ReplyMessage,
+        CopyMessage,
+        FindRoom,
+        MarkRead,
+        OpenSession,
+        ShowHelp
+    ]
 );
 pub struct Conversation {
     pub(crate) store: Store,
@@ -24,6 +39,11 @@ pub struct Conversation {
     pub(crate) scroller: Entity<MessageScrollerState>,
     pub(crate) composer: Entity<TextareaState>,
     bridge: Bridge,
+    server: String,
+    pub(crate) authenticated: bool,
+    pub(crate) attention: Attention,
+    pub(crate) filter: Entity<InputState>,
+    pub(crate) session_form: Option<WeakEntity<crate::session::SessionForm>>,
     rooms: BTreeMap<String, Value>,
     pub(crate) room: String,
     pub(crate) ready: bool,
@@ -42,6 +62,8 @@ pub struct Conversation {
     transfer: String,
     transfer_busy: bool,
     sidebar: Option<bool>,
+    open_message: Option<u64>,
+    conversation_menu_open: bool,
     pub(crate) rendered_rows: std::cell::Cell<usize>,
     pub(crate) max_render_us: u128,
     pub(crate) geometry: Rc<std::cell::RefCell<BTreeMap<u64, Bounds<Pixels>>>>,
@@ -51,13 +73,15 @@ pub struct Conversation {
 }
 impl Conversation {
     pub fn new(url: String, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let bridge = Bridge::start(url).expect("validated server address");
+        let bridge = Bridge::start(url.clone()).expect("validated server address");
         let events = bridge.events.clone();
         let composer = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .placeholder("Write a message…")
                 .auto_grow(2, 5)
         });
+        let filter = cx.new(|cx| InputState::new(window, cx).placeholder("Find a room…"));
+        let filter_subscription = cx.observe(&filter, |_, _, cx| cx.notify());
         let scroller = cx.new(|cx| MessageScrollerState::new(0, cx));
         let subscription = cx.subscribe_in(&composer, window, |this, _, event, window, cx| {
             if matches!(
@@ -71,7 +95,13 @@ impl Conversation {
             }
             cx.notify();
         });
-        let observation = cx.observe(&scroller, |_, _, cx| cx.notify());
+        let observation = cx.observe_in(&scroller, window, |this, _, window, cx| {
+            this.read_visible(window, cx);
+            cx.notify();
+        });
+        let activation = cx.observe_window_activation(window, |this, window, cx| {
+            this.read_visible(window, cx);
+        });
         let task = cx.spawn_in(window, async move |this, cx| {
             while let Ok(event) = events.recv().await {
                 if this
@@ -88,6 +118,11 @@ impl Conversation {
             scroller,
             composer,
             bridge,
+            server: url,
+            authenticated: false,
+            attention: Attention::default(),
+            filter,
+            session_form: None,
             rooms: BTreeMap::new(),
             room: String::new(),
             ready: false,
@@ -106,12 +141,14 @@ impl Conversation {
             transfer: String::new(),
             transfer_busy: false,
             sidebar: None,
+            open_message: None,
+            conversation_menu_open: false,
             rendered_rows: std::cell::Cell::new(0),
             max_render_us: 0,
             geometry: Rc::new(std::cell::RefCell::new(BTreeMap::new())),
             inspect: false,
             _events: task,
-            _subscriptions: vec![subscription, observation],
+            _subscriptions: vec![subscription, observation, activation, filter_subscription],
         }
     }
     fn command(&mut self, command: Command, cx: &mut Context<Self>) -> bool {
@@ -123,21 +160,108 @@ impl Conversation {
             true
         }
     }
-    fn listing(&mut self, list: &Value) {
-        for key in ["joined", "not_joined"] {
-            if let Some(rooms) = list[key].as_array() {
-                for room in rooms.iter().take(256) {
-                    if let Some(id) = room["room_id"].as_str() {
-                        let mut room = room.clone();
-                        room["_joined"] = Value::Bool(key == "joined");
-                        self.rooms.insert(id.to_owned(), room);
-                    }
+    fn read_visible(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if self.ready
+            && !self.loading
+            && window.is_window_active()
+            && self.scroller.read(cx).is_following_tail()
+        {
+            self.mark_read(cx);
+        }
+    }
+    fn mark_read(&mut self, cx: &mut Context<Self>) {
+        if let Some(id) = self.rows.last().map(|m| m.id)
+            && self.attention.mark_read(&self.room, id)
+        {
+            // Best-effort activity never crowds out a user command or shows a queue error.
+            let _ = self.bridge.commands.try_send(Command::Read {
+                room: self.room.clone(),
+                through: id,
+            });
+            cx.notify();
+        }
+    }
+    pub(crate) fn change_session(
+        &mut self,
+        token: Option<Secret>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.pending || self.transfer_busy {
+            self.error =
+                "Finish the current send or cancel the transfer before changing sessions.".into();
+            cx.notify();
+            return;
+        }
+        let bridge = match Bridge::start_with_token(self.server.clone(), token) {
+            Ok(b) => b,
+            Err(_) => {
+                self.error = "Could not start the session.".into();
+                cx.notify();
+                return;
+            }
+        };
+        let events = bridge.events.clone();
+        self.bridge = bridge;
+        self._events = cx.spawn_in(window, async move |this, cx| {
+            while let Ok(event) = events.recv().await {
+                if this
+                    .update_in(cx, |v, w, cx| v.event(event, w, cx))
+                    .is_err()
+                {
+                    break;
                 }
             }
-        }
-        while self.rooms.len() > 256 {
-            self.rooms.pop_last();
-        }
+        });
+        self.generation += 1;
+        self.ready = false;
+        self.loading = false;
+        self.error.clear();
+        self.transfer.clear();
+        self.status = "Connecting…".into();
+        self.room.clear();
+        self.rooms.clear();
+        self.store = Store::default();
+        self.rows = Rc::new(Vec::new());
+        self.attention = Attention::default();
+        self.drafts.clear();
+        self.files.clear();
+        self.reply = None;
+        self.you.clear();
+        self.composer
+            .update(cx, |s, cx| s.set_value("", window, cx));
+        self.scroller.update(cx, |s, cx| s.reset(0, cx));
+        cx.notify();
+    }
+    pub(crate) fn can_change_session(&self) -> bool {
+        !self.pending && !self.transfer_busy
+    }
+    pub(crate) fn session_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let owner = cx.weak_entity();
+        let server = self.server.clone();
+        let form = cx.new(|cx| crate::session::SessionForm::new(owner, server, window, cx));
+        self.session_form = Some(form.downgrade());
+        window.open_dialog(cx, move |dialog, _, _| {
+            let clear = form.clone();
+            dialog
+                .title("Sign in to Apron")
+                .child(form.clone())
+                .on_close(move |_, window, cx| clear.update(cx, |f, cx| f.clear(window, cx)))
+        });
+    }
+    fn help_dialog(window: &mut Window, cx: &mut App) {
+        window.open_dialog(cx,|dialog,_,_|dialog.title("Keyboard & message actions").child(div().flex().flex_col().gap_3()
+            .child("Ctrl+Enter — send · Enter — new line")
+            .child("Ctrl+K — find a room · Ctrl+B — toggle navigation")
+            .child("Ctrl+PageUp — earlier history · Ctrl+PageDown — latest")
+            .child("Right-click a message, or Tab to its actions button and press Enter")
+            .child("With a message focused: R — reply · Ctrl+Shift+C — copy message")
+            .child("Ctrl+Shift+U — mark this room read")
+            .child("Ctrl+C — copy selected text · Escape — close menu or cancel reply")
+            .child("Unread counts cover messages received during this session. Mention badges use server-provided mention IDs, not matching text.")));
+    }
+    fn listing(&mut self, list: &Value) {
+        model::update_rooms(&mut self.rooms, list);
     }
     pub(crate) fn select(&mut self, room: String, window: &mut Window, cx: &mut Context<Self>) {
         if !self.room.is_empty() {
@@ -222,7 +346,16 @@ impl Conversation {
                 self.generation += 1;
                 self.transfer_busy = false;
             }
-            Event::Ready { you, rooms, caps } => {
+            Event::Ready {
+                you,
+                authenticated,
+                rooms,
+                caps,
+            } => {
+                self.authenticated = authenticated;
+                if self.you != you {
+                    self.attention = Attention::default();
+                }
                 self.you = you;
                 self.rooms.clear();
                 self.listing(&rooms);
@@ -242,11 +375,49 @@ impl Conversation {
             }
             Event::Notice(frame) => match frame["method"].as_str() {
                 Some("message") => {
-                    if self.store.apply(frame["params"].clone()) {
+                    let raw = &frame["params"];
+                    let id = model::number(&raw["message_id"]);
+                    let old = id.and_then(|id| self.store.get(id)).cloned();
+                    if self.store.apply(raw.clone()) {
+                        if let Some(message) = id.and_then(|id| self.store.get(id)).cloned() {
+                            if let Some(old) = &old
+                                && old.room != message.room
+                            {
+                                self.attention.remove(&old.room, old.id);
+                            }
+                            let mentioned = raw["body"]["mentions"]
+                                .as_array()
+                                .is_some_and(|v| v.iter().any(|id| id == &self.you));
+                            let previously = old.as_ref().is_some_and(|m| {
+                                m.raw["body"]["mentions"]
+                                    .as_array()
+                                    .is_some_and(|v| v.iter().any(|id| id == &self.you))
+                            });
+                            if message.deleted() {
+                                self.attention.remove(&message.room, message.id);
+                            } else {
+                                self.attention.receive(
+                                    &message.room,
+                                    message.id,
+                                    raw["from"]["user_id"] == self.you,
+                                    mentioned,
+                                    old.is_some() && mentioned && !previously,
+                                );
+                            }
+                        }
                         self.refresh(cx);
+                        self.read_visible(window, cx);
                     }
                 }
                 Some("room_update") => self.listing(&frame["params"]),
+                Some("activity") if frame["params"]["from"]["user_id"] == self.you => {
+                    if let (Some(room), Some(id)) = (
+                        frame["params"]["room_id"].as_str(),
+                        model::number(&frame["params"]["read_message_id"]),
+                    ) {
+                        self.attention.mark_read(room, id);
+                    }
+                }
                 _ => {}
             },
             Event::History {
@@ -266,6 +437,7 @@ impl Conversation {
                     }
                 }
                 self.refresh(cx);
+                self.read_visible(window, cx);
             }
             Event::Sent {
                 generation,
@@ -280,7 +452,7 @@ impl Conversation {
                             .update(cx, |s, cx| s.set_value("", window, cx));
                         self.reply = None;
                     }
-                    self.transfer = "Message accepted".into();
+                    self.transfer.clear();
                 }
             }
             Event::Files { generation, files } => {
@@ -335,7 +507,10 @@ impl Conversation {
             cx.notify();
         }
     }
-    pub(crate) fn smoke_reply(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn begin_reply(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.ready || !self.joined() {
+            return;
+        }
         self.reply = Some(id);
         self.composer.update(cx, |s, cx| s.focus(window, cx));
         cx.notify();
@@ -432,8 +607,29 @@ impl Conversation {
             })
             .unwrap_or_default();
         let reply_owner = owner.clone();
+        let menu_owner = owner.clone();
+        let context_owner = owner.clone();
+        let open_owner = owner.clone();
+        let menu_open = owner
+            .upgrade()
+            .is_some_and(|v| v.read(cx).open_message == Some(id));
+        let group: SharedString = format!("message-{id}").into();
+        let mentioned = owner.upgrade().is_some_and(|v| {
+            raw["body"]["mentions"]
+                .as_array()
+                .is_some_and(|ms| ms.iter().any(|id| id == &v.read(cx).you))
+        });
         let mut row = div()
             .id(("message", id))
+            .group(group.clone())
+            .key_context("Message")
+            .on_action(move |_: &ReplyMessage, window, cx| {
+                let _ = reply_owner.update(cx, |v, cx| v.begin_reply(id, window, cx));
+            })
+            .on_action(move |_: &CopyMessage, _, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))
+            })
+            .when(mentioned, |d| d.bg(cx.theme().primary.opacity(0.05)))
             .flex()
             .flex_col()
             .gap_1()
@@ -459,25 +655,25 @@ impl Conversation {
                     )
                     .child(div().flex_1())
                     .child(
-                        Button::new(("reply", id))
+                        Button::new(("message-actions", id))
                             .ghost()
                             .xsmall()
-                            .label("Reply")
-                            .on_click(move |_, window, cx| {
-                                let _ = reply_owner.update(cx, |this, cx| {
-                                    this.reply = Some(id);
-                                    this.composer.update(cx, |s, cx| s.focus(window, cx));
+                            .icon(IconName::Ellipsis)
+                            .accessibility_label("Message actions")
+                            .when(!menu_open, |b| {
+                                b.tooltip("Message actions · Tab then Enter")
+                            })
+                            .opacity(if menu_open { 1. } else { 0. })
+                            .group_hover(group, |s| s.opacity(1.))
+                            .focus_visible(|s| s.opacity(1.))
+                            .dropdown_menu(move |menu, _, cx| {
+                                Self::message_menu(menu, &menu_owner, cx)
+                            })
+                            .on_open_change(move |open, _, cx| {
+                                let _ = open_owner.update(cx, |v, cx| {
+                                    v.open_message = (*open).then_some(id);
                                     cx.notify();
                                 });
-                            }),
-                    )
-                    .child(
-                        Button::new(("copy", id))
-                            .ghost()
-                            .xsmall()
-                            .label("Copy")
-                            .on_click(move |_, _, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))
                             }),
                     ),
             );
@@ -541,7 +737,15 @@ impl Conversation {
                 }
             }
         }
-        row.into_any_element()
+        row.context_menu(move |menu, _, cx| Self::message_menu(menu, &context_owner, cx))
+            .into_any_element()
+    }
+    fn message_menu(menu: PopupMenu, owner: &WeakEntity<Self>, cx: &App) -> PopupMenu {
+        let can_reply = owner
+            .upgrade()
+            .is_some_and(|v| v.read(cx).ready && v.read(cx).joined());
+        menu.menu_with_disabled("Reply", Box::new(ReplyMessage), !can_reply)
+            .menu("Copy message", Box::new(CopyMessage))
     }
     fn navigation(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut pane = div()
@@ -576,26 +780,81 @@ impl Conversation {
             .min_h_0()
             .overflow_y_scroll()
             .px_2();
-        for (id, room) in &self.rooms {
+        let query = self.filter.read(cx).value().to_lowercase();
+        pane = pane.child(
+            div()
+                .px_3()
+                .pb_3()
+                .child(Input::new(&self.filter).aria_label("Find a room").w_full()),
+        );
+        let mut ordered: Vec<_> = self.rooms.iter().collect();
+        ordered.sort_by_key(|(id, room)| {
+            (
+                room["parent_room_id"].as_str().unwrap_or(id).to_owned(),
+                room["parent_room_id"].is_string(),
+                room["title"].as_str().unwrap_or(id).to_lowercase(),
+            )
+        });
+        let mut matches = 0;
+        for (id, room) in ordered {
+            if !format!("{} {}", id, room["title"].as_str().unwrap_or(""))
+                .to_lowercase()
+                .contains(&query)
+            {
+                continue;
+            }
+            matches += 1;
             let target = id.clone();
             let title = model::clean(room["title"].as_str().unwrap_or(id), 80);
+            let (unread, mentions) = self.attention.counts(id);
             rooms = rooms.child(
                 Button::new(SharedString::from(format!("room-{id}")))
                     .ghost()
                     .selected(id == &self.room)
                     .w_full()
                     .justify_start()
-                    .label(format!(
-                        "{} {title}",
-                        if room["parent_room_id"].is_string() {
-                            "↳"
-                        } else {
-                            "#"
-                        }
-                    ))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .w_full()
+                            .child(div().flex_1().min_w_0().truncate().child(format!(
+                                "{} {title}",
+                                if room["parent_room_id"].is_string() {
+                                    "↳"
+                                } else {
+                                    "#"
+                                }
+                            )))
+                            .when(unread > 0, |d| {
+                                d.child(div().text_xs().font_weight(FontWeight::SEMIBOLD).child(
+                                    if mentions > 0 {
+                                        format!("{unread} · @{mentions}")
+                                    } else {
+                                        unread.to_string()
+                                    },
+                                ))
+                            }),
+                    )
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.select(target.clone(), window, cx)
                     })),
+            );
+        }
+        if matches == 0 {
+            rooms = rooms.child(
+                div()
+                    .p_3()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(if !query.is_empty() {
+                        "No matching rooms"
+                    } else if self.ready {
+                        "No rooms available"
+                    } else {
+                        "Rooms appear after connecting"
+                    }),
             );
         }
         pane = pane.child(rooms).child(
@@ -603,7 +862,13 @@ impl Conversation {
                 .p_4()
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
-                .child("Guest session"),
+                .child(if !self.ready {
+                    "Session offline"
+                } else if self.authenticated {
+                    "Token session"
+                } else {
+                    "Guest session"
+                }),
         );
         pane.into_any_element()
     }
@@ -623,6 +888,14 @@ impl Conversation {
             .and_then(|r| r["title"].as_str())
             .unwrap_or(&self.room)
             .to_owned();
+        let content_width = window.viewport_size().width
+            - if self.sidebar_visible(window) {
+                window.rem_size() * 14.
+            } else {
+                px(0.)
+            };
+        let show_history = content_width >= window.rem_size() * 32.;
+        let can_load = self.more && !self.loading && self.ready;
         div()
             .h_16()
             .px_6()
@@ -661,36 +934,80 @@ impl Conversation {
                             .child(self.status.clone()),
                     ),
             )
+            .when(show_history, |d| {
+                d.child(
+                    Button::new("older")
+                        .ghost()
+                        .small()
+                        .label(if self.loading {
+                            "Loading…"
+                        } else {
+                            "Load earlier"
+                        })
+                        .disabled(!self.more || self.loading || !self.ready)
+                        .on_click(cx.listener(|this, _, _, cx| this.older(cx))),
+                )
+            })
+            .when(self.attention.counts(&self.room).0 > 0, |d| {
+                let (unread, mentions) = self.attention.counts(&self.room);
+                d.child(
+                    Button::new("unread")
+                        .ghost()
+                        .small()
+                        .label(if mentions > 0 {
+                            format!("{unread} unread · @{mentions}")
+                        } else {
+                            format!("{unread} unread")
+                        })
+                        .tooltip("Go to first retained unread message")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Some(id) = this.attention.first_unread(&this.room)
+                                && let Some(ix) = this.rows.iter().position(|m| m.id >= id)
+                            {
+                                this.scroller.update(cx, |s, cx| s.scroll_to_item(ix, cx));
+                            }
+                        })),
+                )
+            })
+            .when(!self.ready, |d| {
+                d.child(
+                    Button::new("reconnect")
+                        .ghost()
+                        .small()
+                        .label(if self.status == "Sign-in required" {
+                            "Sign in…"
+                        } else {
+                            "Retry"
+                        })
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            if this.status == "Sign-in required" {
+                                this.session_dialog(window, cx);
+                            } else {
+                                this.command(Command::Reconnect, cx);
+                            }
+                        })),
+                )
+            })
             .child(
-                Button::new("older")
+                Button::new("conversation-menu")
                     .ghost()
                     .small()
-                    .label(if self.loading {
-                        "Loading…"
-                    } else {
-                        "Load earlier"
+                    .icon(IconName::Ellipsis)
+                    .accessibility_label("Conversation and session actions")
+                    .when(!self.conversation_menu_open, |b| {
+                        b.tooltip("Conversation and session actions")
                     })
-                    .disabled(!self.more || self.loading || !self.ready)
-                    .on_click(cx.listener(|this, _, _, cx| this.older(cx))),
-            )
-            .child(
-                Button::new("latest")
-                    .ghost()
-                    .small()
-                    .label("Latest")
-                    .disabled(!self.ready)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.history(None, cx);
-                        this.scroller.update(cx, |s, cx| s.scroll_to_end(cx));
-                    })),
-            )
-            .child(
-                Button::new("reconnect")
-                    .ghost()
-                    .small()
-                    .label("Reconnect")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.command(Command::Reconnect, cx);
+                    .dropdown_menu(move |menu, _, _| {
+                        menu.menu("Mark room read", Box::new(MarkRead))
+                            .menu("Jump to latest", Box::new(Latest))
+                            .menu_with_disabled("Load earlier", Box::new(LoadOlder), !can_load)
+                            .separator()
+                            .menu("Sign in with token…", Box::new(OpenSession))
+                            .menu("Keyboard shortcuts…", Box::new(ShowHelp))
+                    })
+                    .on_open_change(cx.listener(|this, open, _, cx| {
+                        this.conversation_menu_open = *open;
+                        cx.notify();
                     })),
             )
             .into_any_element()
@@ -711,7 +1028,14 @@ impl Conversation {
             })
             .unwrap_or_else(|| "Earlier message".into())
     }
-    fn compose(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn compose(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let content_width = window.viewport_size().width
+            - if self.sidebar_visible(window) {
+                window.rem_size() * 14.
+            } else {
+                px(0.)
+            };
+        let show_hint = content_width >= window.rem_size() * 26.;
         let mut pane = div()
             .flex()
             .flex_col()
@@ -799,6 +1123,7 @@ impl Conversation {
                 .gap_2()
                 .child(
                     Button::new("attach")
+                        .flex_shrink_0()
                         .ghost()
                         .small()
                         .label("Attach files…")
@@ -813,12 +1138,16 @@ impl Conversation {
                 .child(
                     div()
                         .flex_1()
+                        .min_w_0()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
-                        .child("Ctrl+Enter to send · text stays local until sent"),
+                        .when(show_hint, |d| {
+                            d.child("Ctrl+Enter to send · text stays local until sent")
+                        }),
                 )
                 .child(
                     Button::new("send")
+                        .flex_shrink_0()
                         .primary()
                         .label(if self.pending {
                             "Sending…"
@@ -908,6 +1237,8 @@ impl Render for Conversation {
                 .text_color(cx.theme().muted_foreground)
                 .child(if self.loading {
                     "Loading conversation…"
+                } else if self.status == "Sign-in required" {
+                    "Sign in to continue"
                 } else if !self.ready {
                     "Waiting for connection"
                 } else {
@@ -915,6 +1246,8 @@ impl Render for Conversation {
                 })
                 .child(if self.ready {
                     "Choose a room or start a conversation below."
+                } else if self.status == "Sign-in required" {
+                    "Use Sign in above to enter a token or choose guest access."
                 } else {
                     "Drafts stay local while the connection is unavailable."
                 })
@@ -924,7 +1257,7 @@ impl Render for Conversation {
         };
         content = content
             .child(div().flex_1().min_h_0().child(transcript))
-            .child(self.compose(cx));
+            .child(self.compose(window, cx));
         let shell = div()
             .key_context("Apron")
             .size_full()
@@ -934,6 +1267,16 @@ impl Render for Conversation {
             .text_color(cx.theme().foreground)
             .text_sm()
             .on_action(cx.listener(|this, _: &SendMessage, window, cx| this.send(window, cx)))
+            .on_action(cx.listener(|this, _: &FindRoom, window, cx| {
+                this.sidebar = Some(true);
+                this.filter.update(cx, |s, cx| s.focus(window, cx));
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &MarkRead, _, cx| this.mark_read(cx)))
+            .on_action(
+                cx.listener(|this, _: &OpenSession, window, cx| this.session_dialog(window, cx)),
+            )
+            .on_action(cx.listener(|_, _: &ShowHelp, window, cx| Self::help_dialog(window, cx)))
             .on_action(cx.listener(|this, _: &LoadOlder, _, cx| this.older(cx)))
             .on_action(cx.listener(|this, _: &Latest, _, cx| {
                 this.scroller.update(cx, |s, cx| s.scroll_to_end(cx))

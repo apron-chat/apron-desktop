@@ -162,3 +162,62 @@ async fn actor_reports_interruption_without_resending() {
         }
     }
 }
+
+#[tokio::test]
+#[ignore = "requires the dedicated official loopback Apron server"]
+async fn joining_uses_membership_rpc_and_preserves_room_fields() {
+    let mut owner = Client::connect(OFFICIAL, None).await.unwrap();
+    owner.guest().await.unwrap();
+    let created = owner
+        .rpc(
+            "room_set",
+            json!({"title":"Synthetic join preserves title","description":"Unchanged by a join"}),
+        )
+        .await
+        .unwrap();
+    let room = text(&created["room_id"]).to_owned();
+    let bridge = Bridge::start(OFFICIAL.into()).unwrap();
+    async fn next(bridge: &Bridge) -> Event {
+        tokio::time::timeout(Duration::from_secs(8), bridge.events.recv())
+            .await
+            .unwrap()
+            .unwrap()
+    }
+    loop {
+        if matches!(next(&bridge).await, Event::Ready { .. }) {
+            break;
+        }
+    }
+    bridge
+        .commands
+        .send(Command::Join { room: room.clone() })
+        .await
+        .unwrap();
+    loop {
+        match next(&bridge).await {
+            Event::Notice(frame) if frame["method"] == "room_update" => {
+                if let Some(joined) = frame["params"]["joined"].as_array()
+                    && let Some(record) = joined.iter().find(|r| r["room_id"] == room)
+                {
+                    assert_eq!(record["title"], "Synthetic join preserves title");
+                    assert_eq!(record["description"], "Unchanged by a join");
+                    break;
+                }
+            }
+            Event::Failure { message, .. } => panic!("Join failed: {message}"),
+            _ => {}
+        }
+    }
+    let list = owner
+        .rpc("room_list", json!({"filter":"all"}))
+        .await
+        .unwrap();
+    let record = list["joined"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["room_id"] == room)
+        .unwrap();
+    assert_eq!(record["title"], "Synthetic join preserves title");
+    assert_eq!(record["description"], "Unchanged by a join");
+}

@@ -87,7 +87,7 @@ these against real chat content.
 ## Verification and limits
 
 - Optimized x86_64 Linux build: passed with pinned Rust 1.99.0.
-- Nine core/media tests: passed (bounded state, stale log changes, ordered splices,
+- Original nine core/media tests: passed (bounded state, stale log changes, ordered splices,
   untrusted text sanitization, origin policy, redirects/auth forwarding, real file
   bounds including chunked downloads, serialized-byte cache eviction and
   no-overwrite atomic saves).
@@ -135,8 +135,10 @@ the file transfer protocol and destination safety are tested independently.
 Rich attachment previews, native IME, accessibility assistive software, fractional
 scaling, hardware GPU, and actual niri behavior remain unverified. Selection
 spanning unrendered rows and resize-during-selection behavior also remain unverified.
-Unread/mentions, token auth, persistence, notifications, and moderation are intentionally
-outside this comparison's scope; see the complete list in README.md.
+The subsequent design pass adds session-only token auth/resume and bounded unread/mention
+tracking; see DESIGN_REVIEW.md for its additional verification. Persistent state,
+notifications and moderation remain deferred. Original measurements above remain
+historical evidence, not measurements of every subsequent edit.
 
 ## Next decision
 
@@ -146,3 +148,25 @@ preservation, keyboard flows and settled idle all behaved well here. Next measur
 actual frame presentation on hardware, verify IME/accessibility and file portals,
 and run repeated like-for-like trials. GTK currently uses less measured memory
 and provides the broader implemented product feature set.
+
+## After the design and session-auth pass
+
+A fresh synthetic room again contained 1,000 messages of 1,045 text bytes each.
+The final build loaded the latest page plus ten older pages under the same
+headless Weston / llvmpipe setup. This single warm run measured:
+
+| Metric | Final design pass |
+| --- | ---: |
+| Latest benchmark-room page | 66.6 ms |
+| Median older page | 44.9 ms |
+| Maximum interval of the 10 ms UI heartbeat during load | 89.5 ms |
+| RSS after loading | 146.5 MiB |
+| Retained transcript records | 549 |
+| First 10-second post-load CPU | 19.7% of one core; 36 row renders |
+| Following 10-second settled CPU | 0 measured CPU ticks; 0 row renders |
+
+Raw data: [polish-benchmark.json](docs/polish-benchmark.json). Zero ticks means
+below the timer's resolution over that interval, not proof of zero energy use.
+Page timings end at state update, not GPU presentation. The difference from prior
+runs is not a statistical regression conclusion. Actual hardware-GPU/niri frame
+presentation, IME and assistive software remain untested.
