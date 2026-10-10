@@ -4,7 +4,7 @@ import sys
 import time
 from pathlib import Path
 from gi.repository import GLib
-from apron_native.app import App
+from apron_gtk.app import App
 
 options = argparse.Namespace(demo=True, screenshot=None)
 app = App(options)

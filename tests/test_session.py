@@ -1,7 +1,7 @@
 """Integration: actual libsoup WebSocket client against local fictional server."""
 import unittest
 from gi.repository import GLib
-from apron_native.session import Session
+from apron_gtk.session import Session
 
 
 class SessionTests(unittest.TestCase):

@@ -278,6 +278,22 @@ class DailyActions:
         self.submit_dialog(win, root, 'me', params, done)
         win.present()
 
+    def mute_dialog(self, rid=None):
+        from .app import label
+        title='Mute this room' if rid else 'Notification mutes'
+        win, root=self.dialog(title)
+        active=self.session.presence.muted(rid or '', self.session.store.rooms)
+        root.append(label('Notifications are currently muted.' if active else 'Notifications are currently enabled.', 'dim-label', True))
+        root.append(label('Room mutes include its threads. A global mute or Do Not Disturb can still silence an unmuted room. The server confirms timing and may treat timed mutes as indefinite.', 'dim-label', True))
+        choices=[False,900,3600,True]
+        choice=Gtk.DropDown.new_from_strings(['Unmute','15 minutes','1 hour','Until I unmute'])
+        choice.set_selected(0 if active else 2);root.append(choice)
+        def params():
+            if 'status' not in self.session.caps:raise ValueError('This server does not support notification mutes.')
+            return {'mute':choices[choice.get_selected()], **({'room_id':rid} if rid else {})}
+        self.submit_dialog(win,root,'status',params,title='Apply')
+        win.present();return win
+
     def preferences_dialog(self):
         from .app import label, button
         win, root = self.dialog('Preferences')

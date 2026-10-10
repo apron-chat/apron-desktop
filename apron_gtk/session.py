@@ -9,12 +9,15 @@ gi.require_version('Soup', '3.0')
 from gi.repository import Soup, Gio, GLib
 from .model import Store, MAX_FRAME, PAGE_SIZE, safe_text, validate_url, number
 from .recovery import scan, reconcile_page
+from .presence import Presence
 
 
 class Session:
     def __init__(self, changed=lambda: None):
         self.changed = changed
         self.store = Store()
+        self.presence = Presence()
+        self.presence_timer = 0
         self.http = Soup.Session(timeout=20)
         self.ws = None
         self.cancel = None
@@ -43,7 +46,15 @@ class Session:
         return self.server.get('capabilities', [])
 
     def emit(self):
+        self._clear_timer('presence_timer')
+        self.presence.expire()
+        deadline = self.presence.deadline()
+        if self.ready and deadline is not None:
+            self.presence_timer = GLib.timeout_add(min(2147483647, max(1, int((deadline-time.monotonic())*1000)+1)), self._expire_presence)
         self.changed()
+
+    def _expire_presence(self):
+        self.presence_timer = 0; self.emit(); return False
 
     def connect(self, url, name='', token=''):
         validate_url(url)
@@ -105,6 +116,8 @@ class Session:
         self.ready = False
         self._clear_timer('hello_timer')
         self._clear_timer('ping_timer')
+        self._clear_timer('presence_timer')
+        self.presence.typing.clear()
         if self.cancel:
             self.cancel.cancel()
         old, self.ws = self.ws, None
@@ -223,7 +236,7 @@ class Session:
                     self._lost('This server needs another sign-in method. Guest and token are supported.')
                     return
                 self.auth_started = True
-                params = {'scheme': scheme, 'agent': 'apron-native/0.1', 'name': self.name}
+                params = {'scheme': scheme, 'agent': 'apron-gtk/0.1', 'name': self.name}
                 if self.token:
                     params['token'] = self.token
                 self.state = 'Signing in…'
@@ -231,6 +244,7 @@ class Session:
         elif method == 'pong':
             self.awaiting_pong = False
         elif method == 'message':
+            self.presence.typing.pop((p.get('room_id'), p.get('from', {}).get('user_id')), None)
             if 'message_id' not in p:
                 self.error = safe_text(p.get('body', {}).get('text', ''), 500)
             elif self.store.message(p, live=self.ready):
@@ -244,8 +258,11 @@ class Session:
             if p.get('you'):
                 self.store.you.update(p['you'])
                 self.store.user(p['you'])
-        elif method == 'activity' and p.get('from', {}).get('user_id') == self.store.you.get('user_id'):
-            if p.get('read_message_id'):
+        elif method == 'status':
+            self.presence.status(p)
+        elif method == 'activity':
+            self.presence.activity(p, self.store.you.get('user_id'))
+            if p.get('from', {}).get('user_id') == self.store.you.get('user_id') and p.get('read_message_id'):
                 self.store.mark_read(p.get('room_id', ''), p['read_message_id'])
                 self.on_read()
         self.emit()
@@ -271,6 +288,7 @@ class Session:
             return
         old_you = self.store.you.get('user_id')
         old_reads = self.store.reads if old_you == result['you']['user_id'] else {}
+        self.presence = Presence()
         self.store = Store()  # fresh bounded window after reconnect, no stale cache
         self.store.reads = old_reads
         self.store.you = result['you']

@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 import time
 from gi.repository import GLib
-from apron_native.app import App, Gtk, Gdk
+from apron_gtk.app import App, Gtk, Gdk
 
 output=Path(sys.argv[1]);output.mkdir(parents=True,exist_ok=True)
 app=App(argparse.Namespace(demo=True,server=None,screenshot=None));app.register(None);app.activate()

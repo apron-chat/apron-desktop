@@ -1,4 +1,4 @@
-# Apron Native
+# apron-gtk
 
 A working native Linux client for **Apron protocol 8**, built with Python,
 GTK4, libadwaita, and libsoup 3. Native Wayland widgets; no Electron, WebView,
@@ -7,6 +7,17 @@ complete replacement for apron-web. See [FEATURE_PARITY.md](FEATURE_PARITY.md)
 for the source-reviewed functional matrix and remaining work.
 
 ![Native Wayland preview](docs/preview.png)
+
+The application, command and package are named **apron-gtk**. Python modules use
+`apron_gtk`; the desktop/Wayland application ID is `chat.apron.Gtk`.
+
+Existing installations retain their saved data: if the new configuration
+directory does not exist, apron-gtk reuses `~/.config/apron-native` (under
+`$XDG_CONFIG_HOME` when set). New installs use `~/.config/apron-gtk`.
+`APRON_GTK_STATE_DIR` overrides both; the old `APRON_NATIVE_STATE_DIR` remains a
+fallback. The existing Secret Service schema is deliberately retained so saved
+tokens remain discoverable. No credentials are copied to a file. Historical
+benchmark logs and before-design screenshots retain the former name.
 
 ## Run on NixOS / niri
 
@@ -18,16 +29,16 @@ GTK4, libadwaita, libsoup, introspection data, desktop launcher, and icon.
 nix run path:.                         # connection dialog; no automatic remote connection
 nix develop path:.
 python scripts/demo_server.py          # terminal 1; fictional loopback-only server
-GDK_BACKEND=wayland python -m apron_native.app --demo  # terminal 2, in the dev shell
+GDK_BACKEND=wayland python -m apron_gtk.app --demo  # terminal 2, in the dev shell
 
 # Build/install
 nix build path:.
 nix profile install path:.
 ```
 
-After installation, launch **Apron** from your application launcher. For niri,
-an optional binding is `Mod+A { spawn "apron-native"; }` in the existing `binds`
-block. It is an ordinary toplevel Wayland window with app ID `chat.apron.Native`;
+After installation, launch **apron-gtk** from your application launcher. For niri,
+an optional binding is `Mod+A { spawn "apron-gtk"; }` in the existing `binds`
+block. It is an ordinary toplevel Wayland window with app ID `chat.apron.Gtk`;
 it needs no XWayland or compositor-specific plugin. `GDK_BACKEND=wayland` can
 force Wayland if troubleshooting backend selection. GTK follows the system's
 appearance and scaling settings.
@@ -48,7 +59,7 @@ sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-soup-3.0 \
   python3-markdown-it python3-websockets
 /usr/bin/python3 scripts/demo_server.py
 # In another terminal, from this directory:
-GDK_BACKEND=wayland /usr/bin/python3 -m apron_native.app --demo
+GDK_BACKEND=wayland /usr/bin/python3 -m apron_gtk.app --demo
 ```
 
 Without `--demo`, enter your server's `wss://` address and either a guest
@@ -70,7 +81,7 @@ uses them; `.deps` is intentionally omitted from source downloads:
 
 ```sh
 scripts/local-env.sh /usr/bin/python3 scripts/demo_server.py
-scripts/local-env.sh /usr/bin/python3 -m apron_native.app --demo
+scripts/local-env.sh /usr/bin/python3 -m apron_gtk.app --demo
 ```
 
 ## Interface
@@ -88,7 +99,7 @@ light, dark, compact, dialog and interrupted-connection previews.
 
 Local draft/read storage is **off by default**. When enabled, it stores plaintext
 composers (including reply IDs and mention IDs) and read cursors in
-`$XDG_CONFIG_HOME/apron-native/local-state.json` (normally `~/.config/apron-native/`).
+`$XDG_CONFIG_HOME/apron-gtk/local-state.json` (normally `~/.config/apron-gtk/`).
 Each profile is keyed by the exact validated server URL and authenticated user
 ID. A new guest identity cannot inherit another identity's drafts. No tokens,
 received messages, or room/member lists enter this file.
@@ -115,6 +126,40 @@ recovered history never emits desktop notifications. Each scan allows at most
 128 sequential 50-record requests. Expired history or the scan budget produces
 an explicit warning; an unverifiable older page is not committed. This is not
 a durable full-room log cache or background recovery of every room.
+
+## Typing, presence and attachments
+
+Typing uses `activity`: 15-second indicators, refreshed at most once every
+12 seconds during user edits, stopped after a five-second pause or room switch.
+Programmatically restored drafts do not announce typing. Incoming indicators
+expire locally and stop on a message; the map is capped at 256 participants.
+
+With `status`, five minutes without input to this window reports idle; input
+returns it to attended. A connection starting unattended reports that state.
+Older servers rejecting numeric idle get a boolean fallback for that connection.
+The account menu and room menu expose notification mutes: 15 minutes, one hour,
+until unmuted, or unmute. Server notifications determine the stored mute state.
+Global/parent-room mutes and Do Not Disturb suppress local mention notifications.
+These settings remain server-owned; there is no new background polling loop.
+
+With `embed:upload`, the composer attachment icon opens a native file chooser,
+then a confirmation with an optional caption. Join the room first. One file up
+to **8 MiB** is read, confirmed and posted as an upload embed; its returned
+single-use `write_url` receives an HTTP PUT. The existing composer draft is kept.
+The caption is a separate message; attaching to the current reply or sending
+multiple files together is not implemented. Failed/uncertain transfers are never
+automatically retried; check the message before posting another attachment.
+
+Received uploads show pending metadata or **Save attachment…**. Saving requires
+an explicit destination and downloads at most 8 MiB. Nothing is opened or
+executed automatically. Transfers allow only the connected server's HTTP(S)
+origin, HTTPS remotely and HTTP for the existing loopback development connection.
+They use a separate HTTP session with no bearer token, cookies, referrer or
+redirect following. Cross-origin/CDN URLs are visibly unsupported even when
+legitimate; this conservative restriction is intentional. The transfer can be
+cancelled and has a two-minute operation timeout. There is no automatic media fetch, inline decoder, audio/video player,
+iframe/HTML renderer, stream viewer, attachment queue or upload resumption.
+The server may reject a file type/size below the client limit; errors stay visible.
 
 ## What works
 
@@ -147,7 +192,7 @@ a durable full-room log cache or background recovery of every room.
   desktop notification delivery is still unverified in the headless environment.
 - **Find** searches only the bounded loaded-message cache, not all server history.
 - CommonMark formatted text through a restricted Pango renderer; raw HTML is
-  escaped, images/embeds have text fallbacks, and nothing loads remote media.
+  escaped, images/embeds have text fallbacks; attachment downloads require an explicit Save action.
   Links are displayed as text and do not execute or open automatically.
 - Adaptive sidebar below 760px; selectable message text; native focus behavior.
   `Ctrl+K` finds rooms, `Ctrl+F` searches loaded messages, `Ctrl+L` focuses the
@@ -176,8 +221,8 @@ bounded and control/bidi override characters are removed for display.
 ## Deliberate limitations
 
 - This is not full protocol conformance. Passkeys, email sign-in, durable
-  chat/session-cache recovery, multiple accounts, uploads, rich interactive embeds,
-  bulk message operations, commands, calls, typing/idle/mutes, and server push are
+  chat/session-cache recovery, multiple simultaneous accounts, rich interactive embeds,
+  bulk message operations, commands, calls, and server push are
   deferred. The keyring adapter and Gio notifications require real desktop-service
   validation; they are not yet verified end to end. The public Apron demo may permit
   guest reading but require passkeys for writing; use the local fixture or a
@@ -197,7 +242,7 @@ bounded and control/bidi override characters are removed for display.
 
 ## Measured performance
 
-The 1,000-message loopback benchmark (1,045 text bytes per message) measured
+The prior milestone’s 1,000-message loopback benchmark (1,045 text bytes per message) measured
 **151 ms worst 10-ms heartbeat interval**, down from **502 ms** after the visual
 design pass and **548 ms** in the earlier daily-chat build. Final client RSS was
 **78.5 MiB**, with **0.072% of one CPU core** over a 9.89-second idle sample.
@@ -207,7 +252,8 @@ pages 825–1,321 ms (median 927 ms). GTK yields between row batches and unchang
 rows retain identity and scroll position. There are still long frames; this is
 incremental rendering, not viewport virtualization or a frame-time guarantee.
 Measurements are single warm software-rendered Weston runs, not general targets.
-See TEST_RESULTS and `docs/benchmark-*.json` for method and limitations.
+Presence/attachment additions have not been rebenchmarked. See TEST_RESULTS
+and `docs/benchmark-*.json` for method and limitations.
 
 ## Verification
 
@@ -237,6 +283,7 @@ aprond --store memory --addr 127.0.0.1:18766 --messages-per-minute 10000 \
 # From this client, in its Python/native development environment:
 python tests/reference_interop.py
 GDK_BACKEND=wayland python tests/ui_daily_smoke.py /tmp/apron-daily.png
+GDK_BACKEND=wayland python tests/ui_presence_media.py /tmp/apron-presence.png
 python scripts/seed_reference.py > /tmp/apron-benchmark-seed.json
 APRON_BENCH_ROOM=$(python -c 'import json; print(json.load(open("/tmp/apron-benchmark-seed.json"))["room_id"])') \
   GDK_BACKEND=wayland python tests/benchmark_ui.py

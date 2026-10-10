@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
-from apron_native.model import Store
-from apron_native.recovery import scan, reconcile_page
+from apron_gtk.model import Store
+from apron_gtk.recovery import scan, reconcile_page
 
 
 def message(mid, log, room='r', **fields):
@@ -38,7 +38,7 @@ class RecoveryTests(unittest.TestCase):
         for response in [page(lower='22'),page(last='20',more=True)]:
             s=FakeSession([response]);errors=[];scan(s,'r',21,40,lambda _:None,errors.append)
             self.assertIsNotNone(errors[0])
-        with patch('apron_native.recovery.MAX_SCAN_PAGES',1):
+        with patch('apron_gtk.recovery.MAX_SCAN_PAGES',1):
             s=FakeSession([page(last='30',more=True)]);errors=[];scan(s,'r',21,40,lambda _:None,errors.append)
             self.assertIn('safety limit',errors[0]['message']);self.assertEqual(len(s.calls),1)
         s=FakeSession([]);scan(s,'r',21,40,lambda _:self.fail(),lambda _:self.fail(),valid=lambda:False)

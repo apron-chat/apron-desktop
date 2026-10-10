@@ -3,17 +3,17 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "apron-native"
+name = "apron-gtk"
 version = "0.1.0"
 description = "A native GTK4 Wayland client for Apron"
 requires-python = ">=3.11"
 dependencies = ["PyGObject>=3.42", "markdown-it-py>=3"]
 
 [project.scripts]
-apron-native = "apron_native.app:main"
+apron-gtk = "apron_gtk.app:main"
 
 [tool.setuptools.package-data]
-apron_native = ["*.css"]
+apron_gtk = ["*.css"]
 
 [tool.setuptools]
-packages = ["apron_native"]
+packages = ["apron_gtk"]

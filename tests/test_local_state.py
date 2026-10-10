@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-from apron_native.local_state import LocalState, StateWriter, account_key, MAX_BYTES, clean_account
+from apron_gtk.local_state import LocalState, StateWriter, account_key, MAX_BYTES, clean_account
 
 
 class LocalStateTests(unittest.TestCase):

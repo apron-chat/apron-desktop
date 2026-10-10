@@ -5,7 +5,7 @@ import os
 import resource
 import time
 from gi.repository import GLib
-from apron_native.app import App
+from apron_gtk.app import App
 
 room = os.environ['APRON_BENCH_ROOM']
 app = App(argparse.Namespace(demo=False, server='ws://127.0.0.1:18766/ws', screenshot=None))

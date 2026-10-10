@@ -3,7 +3,7 @@ import argparse
 import sys
 import time
 from gi.repository import GLib
-from apron_native.app import App, Gtk
+from apron_gtk.app import App, Gtk
 
 app=App(argparse.Namespace(demo=False,server='ws://127.0.0.1:18766/ws',screenshot=None))
 app.register(None);app.activate();win=app.get_active_window();ctx=GLib.MainContext.default()

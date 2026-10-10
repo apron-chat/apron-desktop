@@ -58,3 +58,13 @@ checks and unverified environments. No formal accessibility audit or new
 performance benchmark was performed for the original design pass. The subsequent
 incremental-history milestone preserves this layout and updates Preferences with
 opt-in draft/read storage and reset controls; see TEST_RESULTS.md for its measurements.
+
+## apron-gtk daily-use additions
+
+The application wordmark and desktop identity now use apron-gtk. Typing is one
+quiet line above the composer, visible only while someone is typing. Room mutes
+live in the room menu; global mutes live in the account menu. A paperclip appears
+only when the server supports uploads. Received attachments show a compact file
+card with an explicit Save action; upload confirmation and save operations retain
+the native form language. There are no automatic thumbnail or external-media
+requests. [Attachment workflow capture](docs/presence-media.png).

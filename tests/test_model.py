@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
-from apron_native.model import Store, number, validate_url, safe_text
-from apron_native.render import markdown
+from apron_gtk.model import Store, number, validate_url, safe_text
+from apron_gtk.render import markdown
 
 
 def msg(mid='10', log='10', room='general', **fields):
@@ -53,7 +53,7 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(s.timeline('general'), [])
 
     def test_bounded_memory(self):
-        with patch('apron_native.model.MAX_MESSAGES', 4), patch('apron_native.model.MAX_ROOMS', 3):
+        with patch('apron_gtk.model.MAX_MESSAGES', 4), patch('apron_gtk.model.MAX_ROOMS', 3):
             s = Store()
             for i in range(20):
                 s.message(msg(str(i), str(i), str(i)))
@@ -62,7 +62,7 @@ class ModelTests(unittest.TestCase):
             self.assertTrue(s.evicted)
 
     def test_byte_budget_and_partial_read_cursor(self):
-        with patch('apron_native.model.MAX_CACHE_BYTES', 700):
+        with patch('apron_gtk.model.MAX_CACHE_BYTES', 700):
             s = Store(); s.you = {'user_id': 'me'}
             for i in range(10, 20):
                 s.message(msg(str(i), str(i), body={'text': 'x' * 200}), live=True)

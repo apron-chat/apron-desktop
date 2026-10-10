@@ -5,11 +5,11 @@ import time
 import tempfile
 import os
 from gi.repository import GLib
-from apron_native.app import App, Window, Gtk
-from apron_native.model import MAX_CACHE_BYTES
+from apron_gtk.app import App, Window, Gtk
+from apron_gtk.model import MAX_CACHE_BYTES
 
 state = tempfile.TemporaryDirectory(prefix='apron-state-smoke-')
-os.environ['APRON_NATIVE_STATE_DIR'] = state.name
+os.environ['APRON_GTK_STATE_DIR'] = state.name
 options=argparse.Namespace(demo=True,server=None,screenshot=None)
 app=App(options);app.register(None);app.activate();win=app.get_active_window()
 ctx=GLib.MainContext.default();errors=[]

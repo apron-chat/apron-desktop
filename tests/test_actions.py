@@ -3,9 +3,9 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from apron_native.actions import message_save, same_snapshot
-from apron_native.model import Store
-from apron_native.preferences import Preferences
+from apron_gtk.actions import message_save, same_snapshot
+from apron_gtk.model import Store
+from apron_gtk.preferences import Preferences
 
 
 class DailyActionTests(unittest.TestCase):
@@ -65,8 +65,8 @@ class DailyActionTests(unittest.TestCase):
 
     def test_keyring_unavailable_has_no_file_fallback(self):
         from unittest.mock import patch
-        from apron_native.keyring import Keyring
-        with patch('apron_native.keyring.Secret', None):
+        from apron_gtk.keyring import Keyring
+        with patch('apron_gtk.keyring.Secret', None):
             keyring=Keyring();results=[]
             keyring.store('wss://example.invalid', 'Synthetic-only', lambda *a:results.append(a))
             self.assertFalse(keyring.available)
@@ -74,7 +74,7 @@ class DailyActionTests(unittest.TestCase):
 
     def test_keyring_async_adapter_calls_only_secret_service(self):
         from unittest.mock import patch, MagicMock
-        from apron_native.keyring import Keyring
+        from apron_gtk.keyring import Keyring
         secret=MagicMock()
         secret.password_store.side_effect=lambda *args: args[-1](None, 'result')
         secret.password_store_finish.return_value=True
@@ -82,7 +82,7 @@ class DailyActionTests(unittest.TestCase):
         secret.password_lookup_finish.return_value='synthetic-token'
         secret.password_clear.side_effect=lambda *args: args[-1](None, 'result')
         secret.password_clear_finish.return_value=True
-        with patch('apron_native.keyring.Secret', secret):
+        with patch('apron_gtk.keyring.Secret', secret):
             keyring=Keyring();results=[]
             keyring.store('wss://example.invalid', 'synthetic-token', lambda *a:results.append(a))
             keyring.lookup('wss://example.invalid',lambda *a:results.append(a))
@@ -98,7 +98,7 @@ class DailyActionTests(unittest.TestCase):
     def test_serialized_keyring_rotation_then_forget(self):
         import gi
         gi.require_version('Gtk','4.0');gi.require_version('Adw','1')
-        from apron_native.ui_actions import DailyActions
+        from apron_gtk.ui_actions import DailyActions
         from types import SimpleNamespace
         class Harness(DailyActions):
             def queue_render(self): pass

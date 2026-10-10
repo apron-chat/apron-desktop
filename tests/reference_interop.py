@@ -4,7 +4,7 @@ Run an isolated --store memory server at 127.0.0.1:18766 first.
 import time
 import unittest
 from gi.repository import GLib
-from apron_native.session import Session
+from apron_gtk.session import Session
 
 
 class OfficialGoInterop(unittest.TestCase):
@@ -74,9 +74,41 @@ class OfficialGoInterop(unittest.TestCase):
         self.assertIsNone(pages[0][1])
         self.assertTrue(any('Synthetic pagination' in m.get('body', {}).get('text', '') for m in s.store.timeline('general')))
 
+    def test_presence_mutes_and_upload_download(self):
+        from apron_gtk.media import Transfers
+        other=Session();other.connect('ws://127.0.0.1:18766/ws','Synthetic observer')
+        self.wait(lambda:other.ready and 'general' in other.store.rooms)
+        try:
+            own=self.s.store.you['user_id']
+            self.s.notify('activity',{'room_id':'general','typing':15})
+            self.wait(lambda:('general',own) in other.presence.typing)
+            from apron_gtk.attention import Attention
+            attention=Attention(self.s);attention.last_input-=301;attention.idle=True;attention.report_idle()
+            self.wait(lambda:other.store.users.get(own,{}).get('status')=='idle')
+            attention.input()
+            self.wait(lambda:other.store.users.get(own,{}).get('status')=='online')
+            attention.close()
+            self.request('status',{'room_id':'general','mute':900})
+            self.wait(lambda:'general' in self.s.presence.mutes)
+            self.request('status',{'room_id':'general','mute':False})
+            self.wait(lambda:'general' not in self.s.presence.mutes)
+            self.assertIn('embed:upload',self.s.caps)
+            result=self.request('message',{'room_id':'general','body':{'text':'Synthetic file','embeds':[{'kind':'upload','title':'synthetic.txt'}]}})
+            self.wait(lambda:('general',own) not in other.presence.typing)
+            mid=result['message_id'];t=Transfers();responses=[]
+            t.request('PUT',result['embeds'][0]['write_url'],self.s.url,lambda *a:responses.append(a),b'Synthetic transfer bytes')
+            self.wait(lambda:bool(responses));self.assertIsNone(responses[0][1])
+            self.wait(lambda:bool(self.s.store.messages[mid]['body']['embeds'][0].get('url')))
+            url=self.s.store.messages[mid]['body']['embeds'][0]['url']
+            responses=[];t.request('GET',url,self.s.url,lambda *a:responses.append(a))
+            self.wait(lambda:bool(responses));self.assertEqual(responses[0],(b'Synthetic transfer bytes',None))
+            responses=[];t.request('PUT',result['embeds'][0]['write_url'],self.s.url,lambda *a:responses.append(a),b'No automatic retry')
+            self.wait(lambda:bool(responses));self.assertIsNotNone(responses[0][1])
+        finally:other.disconnect()
+
     def test_archived_page_forward_reconciliation(self):
-        from apron_native.actions import message_save
-        from apron_native.model import Store
+        from apron_gtk.actions import message_save
+        from apron_gtk.model import Store
         rid = self.request('room_set', {'title':'Synthetic archived reconciliation'})['room_id']
         mids = [self.request('message', {'room_id':rid,'body':{'text':f'Original {i}'}})['message_id'] for i in range(65)]
         before = mids[30]
@@ -93,7 +125,7 @@ class OfficialGoInterop(unittest.TestCase):
         self.assertEqual(self.s.store.messages[mids[2]]['room_id'],other)
 
     def test_daily_message_and_room_actions(self):
-        from apron_native.actions import message_save
+        from apron_gtk.actions import message_save
         profile = self.request('me', {'name':'Synthetic Native Profile'})
         self.assertEqual(profile['you']['name'], 'Synthetic Native Profile')
         room = self.request('room_set', {'title':'Synthetic private room', 'private':True, 'description':'Synthetic only'})

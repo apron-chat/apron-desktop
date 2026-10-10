@@ -14,6 +14,8 @@ from .preferences import Preferences
 from .local_state import LocalState, StateWriter, account_key, clean_account
 from .keyring import Keyring
 from .ui_actions import DailyActions
+from .attention import Attention
+from .media import Transfers, MediaActions, transfer_url, file_title
 
 
 def box(vertical=False, spacing=8, margin=0):
@@ -57,9 +59,9 @@ def clear(container):
         container.remove(child)
 
 
-class Window(DailyActions, Adw.ApplicationWindow):
+class Window(MediaActions, DailyActions, Adw.ApplicationWindow):
     def __init__(self, app, options):
-        super().__init__(application=app, title='Apron', default_width=1120, default_height=800)
+        super().__init__(application=app, title='apron-gtk', default_width=1120, default_height=800)
         self.options = options
         self.closing = False
         self.preferences = Preferences()
@@ -68,12 +70,16 @@ class Window(DailyActions, Adw.ApplicationWindow):
         self.state_key = None
         self.state_store = None
         self.state_timer = 0
+        self.transfers = Transfers()
+        self.picking_file = False
+        self.attachment_dialog = None
         self.keyring = Keyring()
         self.apply_theme()
         self.reaction_pending = set()
         self.keyring_jobs = {}
         self.keyring_busy = False
         self.session = Session(self.queue_render)
+        self.attention = Attention(self.session)
         self.session.on_ready = self.ready
         self.session.on_token = self.save_secure_session
         self.session.on_message = self.incoming
@@ -99,6 +105,13 @@ class Window(DailyActions, Adw.ApplicationWindow):
         self.list_signature = self.message_signature = None
         self.focus_bottom = True
         self.build()
+        input_keys = Gtk.EventControllerKey()
+        input_keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        input_keys.connect('key-pressed', lambda *_: (self.attention.input(), False)[1])
+        self.add_controller(input_keys)
+        pointer = Gtk.EventControllerMotion()
+        pointer.connect('motion', lambda *_: self.attention.input())
+        self.add_controller(pointer)
         self.connect('close-request', self.close_requested)
         self.connect('notify::is-active', lambda *_: self.read_visible())
         breakpoint = Adw.Breakpoint.new(Adw.BreakpointCondition.parse('max-width: 760px'))
@@ -126,7 +139,7 @@ class Window(DailyActions, Adw.ApplicationWindow):
         brand.set_margin_bottom(0)
         mark = label('a', 'brand-icon'); mark.set_xalign(.5)
         brand.append(mark)
-        brand.append(label('apron', 'brand'))
+        brand.append(label('apron-gtk', 'brand'))
         sidebar.append(brand)
         self.search = Gtk.SearchEntry(placeholder_text='Find a room')
         self.search.set_tooltip_text('Find a room · Ctrl+K')
@@ -161,6 +174,7 @@ class Window(DailyActions, Adw.ApplicationWindow):
         self.account_menu = self.menu(lambda: [
             ('Your profile…', self.profile_dialog, self.session.ready),
             ('Connection…', self.connect_dialog, True),
+            ('Notification mutes…', self.mute_dialog, self.session.ready and 'status' in self.session.caps),
             ('Preferences…', self.preferences_dialog, True),
             ('Keyboard shortcuts', self.shortcuts_dialog, True),
         ], 'Account and preferences')
@@ -176,7 +190,7 @@ class Window(DailyActions, Adw.ApplicationWindow):
         self.nav.set_visible(False)
         header.pack_start(self.nav)
         titles = box(True, 2)
-        self.title_label = label('Apron', 'room-title')
+        self.title_label = label('apron-gtk', 'room-title')
         self.title_label.set_xalign(.5)
         self.title_label.set_ellipsize(Pango.EllipsizeMode.END)
         self.title_label.set_max_width_chars(22)
@@ -188,6 +202,7 @@ class Window(DailyActions, Adw.ApplicationWindow):
         header.set_title_widget(titles)
         self.room_menu = self.menu(lambda: [
             ('Room details and members…', self.room_details, self.session.ready and bool(self.room_id)),
+            ('Room notifications…', lambda: self.mute_dialog(self.room_id), self.session.ready and 'status' in self.session.caps),
             ('Start a thread…', self.new_thread, self.session.ready and 'rooms' in self.session.caps and bool(self.room_id)),
             ('Find loaded messages…', self.search_messages, True),
         ], 'Room actions')
@@ -219,6 +234,10 @@ class Window(DailyActions, Adw.ApplicationWindow):
         self.scroll.get_vadjustment().connect('value-changed', self.scrolled)
         content.append(self.scroll)
         composer_outer = box(True, 8, 20)
+        self.typing_label = label('', 'metadata')
+        self.typing_label.set_ellipsize(Pango.EllipsizeMode.END)
+        self.typing_label.set_visible(False)
+        composer_outer.append(self.typing_label)
         self.context_controls = box(spacing=8)
         self.context_controls.set_halign(Gtk.Align.CENTER)
         self.join = button('Join this room', self.join_room, 'suggested-action')
@@ -239,6 +258,7 @@ class Window(DailyActions, Adw.ApplicationWindow):
         self.editor.set_accepts_tab(False)
         self.editor.set_size_request(-1, 44)
         self.editor.update_property([Gtk.AccessibleProperty.LABEL], ['Message composer'])
+        self.editor.get_buffer().connect('begin-user-action', lambda *_: GLib.idle_add(self.composer_activity))
         self.editor.get_buffer().connect('changed', lambda *_: (self.update_send(), self.schedule_state()))
         editor_scroll = Gtk.ScrolledWindow(min_content_height=44, max_content_height=150, propagate_natural_height=True)
         editor_scroll.set_child(self.editor)
@@ -256,6 +276,8 @@ class Window(DailyActions, Adw.ApplicationWindow):
         self.mention_button.set_tooltip_text('Mention a member')
         self.mention_button.update_property([Gtk.AccessibleProperty.LABEL], ['Mention a member'])
         actions.append(self.mention_button)
+        self.attach_button = icon_button('mail-attachment-symbolic', 'Attach a file · maximum 8 MiB', self.choose_attachment)
+        actions.append(self.attach_button)
         self.hint = label('Ctrl+Enter to send', 'metadata')
         self.hint.set_hexpand(True)
         actions.append(self.hint)
@@ -263,6 +285,13 @@ class Window(DailyActions, Adw.ApplicationWindow):
         actions.append(self.send_button)
         compose.append(actions)
         composer_outer.append(compose)
+        transfer_row = box()
+        self.transfer_note = label('', 'metadata', True)
+        self.transfer_note.set_hexpand(True); self.transfer_note.set_visible(False)
+        transfer_row.append(self.transfer_note)
+        self.transfer_cancel = icon_button('process-stop-symbolic', 'Cancel current transfer', self.transfers.cancel)
+        self.transfer_cancel.set_visible(False);transfer_row.append(self.transfer_cancel)
+        composer_outer.append(transfer_row)
         composer_clamp = Adw.Clamp(maximum_size=900, tightening_threshold=700)
         composer_clamp.set_child(composer_outer)
         content.append(composer_clamp)
@@ -308,13 +337,17 @@ class Window(DailyActions, Adw.ApplicationWindow):
         if self.closing: return False
         self.render_pending = False
         s = self.session
-        if not s.ready: self.loading = False
+        if not s.ready:
+            self.loading = False
+            if self.transfers.active:self.transfers.cancel()
         self.status.set_text(('● ' if s.ready else '○ ') + s.state)
         self.account_avatar.set_text(safe_text(s.store.you.get('name') or s.store.you.get('user_id') or 'a')[:1].upper())
         self.identity.set_text(safe_text(s.store.you.get('name') or s.store.you.get('user_id') or 'Not signed in'))
         room = s.store.rooms.get(self.room_id, {})
         self.title_label.set_text(safe_text(room.get('title') or self.room_id or 'Apron'))
-        self.subtitle.set_text(safe_text(room.get('description') or ('Thread' if room.get('parent_room_id') else 'Room conversation')))
+        description = room.get('description') or ('Thread' if room.get('parent_room_id') else 'Room conversation')
+        if s.presence.muted(self.room_id,s.store.rooms): description += ' · Notifications muted'
+        self.subtitle.set_text(safe_text(description))
         self.banner.set_title(safe_text(s.error or ('' if s.ready else s.state + ' · Messages are read-only until connected.')))
         self.banner.set_revealed(bool(s.error or not s.ready))
         self.create_room_button.set_sensitive(s.ready and 'rooms' in s.caps)
@@ -324,7 +357,16 @@ class Window(DailyActions, Adw.ApplicationWindow):
         self.old_button.set_visible('history' in s.caps and self.cursor is not None)
         self.latest_button.set_visible('history' in s.caps and (self.older or not self.focus_bottom))
         self.reply_box.set_visible(self.reply is not None)
+        self.attach_button.set_visible('embed:upload' in s.caps)
+        self.attach_button.set_sensitive(s.ready and not self.transfers.active and not self.sending)
         self.mention_button.set_sensitive(s.ready and bool(room.get('members')))
+        typers = [safe_text(s.store.users.get(uid, {}).get('name') or uid, 40) for rid, uid in s.presence.typing if rid == self.room_id]
+        text = ', '.join(typers[:3]) + (' and others' if len(typers)>3 else '')
+        self.typing_label.set_text(text + (' is typing…' if len(typers)==1 else ' are typing…'))
+        show_typing = bool(typers) and s.ready
+        if self.typing_label.get_visible() != show_typing and self.focus_bottom and not self.older:
+            GLib.idle_add(self.scroll_bottom)
+        self.typing_label.set_visible(show_typing)
         self.render_rooms()
         self.render_messages()
         self.update_send()
@@ -412,7 +454,7 @@ class Window(DailyActions, Adw.ApplicationWindow):
             if not hasattr(child, 'apron_message_id'): self.messages.remove(child)
             child = following
         if not messages:
-            status = Adw.StatusPage(title='Loading conversation…' if self.loading else 'Start a conversation' if self.session.ready else 'Welcome to Apron',
+            status = Adw.StatusPage(title='Loading conversation…' if self.loading else 'Start a conversation' if self.session.ready else 'Welcome to apron-gtk',
                                     description='Fetching recent messages…' if self.loading else 'Connect to your server to find your people.' if not self.session.ready else 'Nothing here yet. Say hello when you’re ready.',
                                     icon_name='chat-message-new-symbolic')
             status.add_css_class('empty-state'); self.messages.append(status)
@@ -518,9 +560,22 @@ class Window(DailyActions, Adw.ApplicationWindow):
             text.set_markup(markdown(body.get('text', '')))
         else:
             text.set_text(safe_text(body.get('text', '')))
+        text.set_visible(bool(text.get_text()) or msg.get('deleted',False))
         card.append(text)
         for embed in body.get('embeds', [])[:12]:
-            card.append(label('▧ ' + embed_text(embed), 'dim-label', True))
+            attachment = box(True, 4)
+            attachment.append(label(('▧ ' + file_title(embed.get('title'))) if embed.get('kind') == 'upload' else '▧ ' + embed_text(embed), 'metadata', True))
+            if embed.get('kind') == 'upload':
+                attachment.add_css_class('attachment')
+                if not embed.get('url'): attachment.append(label('Attachment pending…', 'metadata'))
+                else:
+                    try:
+                        transfer_url(embed['url'], self.session.url)
+                        save = button('Save attachment…', lambda e=embed: self.download_attachment(e), 'flat')
+                        save.set_halign(Gtk.Align.START);attachment.append(save)
+                    except ValueError:
+                        attachment.append(label('External or unsupported attachment URL · not loaded', 'metadata', True))
+            card.append(attachment)
         if not msg.get('deleted') and 'reactions' in self.session.caps:
             reactions = box()
             for emoji, count in self.session.store.reaction_counts(msg['message_id']).items():
@@ -558,7 +613,12 @@ class Window(DailyActions, Adw.ApplicationWindow):
         self.session.store.unread_ids.clear(); self.session.store.mention_ids.clear()
         self.queue_render()
 
+    def composer_activity(self):
+        if not self.closing:self.attention.typing(self.room_id, bool(self.text().strip()))
+        return False
+
     def ready(self):
+        self.attention.ready(self.is_active())
         if self.state_key and self.room_id:
             self.drafts[self.room_id] = (self.text(), self.reply, self.mention_ids[:])
         key = account_key(self.session.url, self.session.store.you['user_id'])
@@ -582,7 +642,9 @@ class Window(DailyActions, Adw.ApplicationWindow):
     def incoming(self, msg):
         if not self.room_id:
             self.room_id = msg['room_id']
-        if self.preferences.data.get('notifications') and self.session.ready and not self.is_active() and msg.get('message_id') == msg.get('log_id') and self.session.store.you.get('user_id') in msg.get('body', {}).get('mentions', []):
+        own = self.session.store.users.get(self.session.store.you.get('user_id'), self.session.store.you)
+        silenced = self.session.presence.muted(msg.get('room_id'), self.session.store.rooms) or own.get('status') == 'dnd'
+        if not silenced and self.preferences.data.get('notifications') and self.session.ready and not self.is_active() and msg.get('message_id') == msg.get('log_id') and self.session.store.you.get('user_id') in msg.get('body', {}).get('mentions', []):
             notice = Gio.Notification.new('New Apron mention')
             notice.set_body('Mention in ' + safe_text(self.session.store.rooms.get(msg['room_id'], {}).get('title') or msg['room_id'], 120))
             notice.set_default_action_and_target('app.open-room', GLib.Variant('s', msg['room_id']))
@@ -602,6 +664,7 @@ class Window(DailyActions, Adw.ApplicationWindow):
         return b.get_text(b.get_start_iter(), b.get_end_iter(), False)
 
     def select_room(self, rid):
+        self.attention.stop_typing()
         self.drafts[self.room_id] = (self.text(), self.reply, self.mention_ids[:])
         while len(self.drafts) > 256:
             self.drafts.pop(next(iter(self.drafts)))
@@ -693,6 +756,7 @@ class Window(DailyActions, Adw.ApplicationWindow):
                            (f'{len(self.mention_ids)} mentioned · ' if self.mention_ids else '') + 'Ctrl+Enter to send')
 
     def send(self):
+        self.attention.stop_typing()
         if not self.send_button.get_sensitive():
             return
         text, rid, reply = self.text(), self.room_id, self.reply
@@ -840,6 +904,8 @@ class Window(DailyActions, Adw.ApplicationWindow):
 
     def close_requested(self, *_):
         self.closing = True
+        self.attention.close()
+        self.transfers.cancel()
         self.persist_state()
         self.state_writer.close()
         if self.row_timer: GLib.source_remove(self.row_timer); self.row_timer = 0
@@ -849,7 +915,7 @@ class Window(DailyActions, Adw.ApplicationWindow):
 
 class App(Adw.Application):
     def __init__(self, options):
-        super().__init__(application_id='chat.apron.Native', flags=Gio.ApplicationFlags.NON_UNIQUE)
+        super().__init__(application_id='chat.apron.Gtk', flags=Gio.ApplicationFlags.NON_UNIQUE)
         self.options = options
         action = Gio.SimpleAction.new('open-room', GLib.VariantType.new('s'))
         def open_room(action, value):
@@ -869,7 +935,7 @@ class App(Adw.Application):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Native Apron client')
+    parser = argparse.ArgumentParser(prog='apron-gtk', description='apron-gtk — native GTK4 client for Apron')
     connection = parser.add_mutually_exclusive_group()
     connection.add_argument('--server', help='Connect as a guest to this ws(s) URL')
     connection.add_argument('--demo', action='store_true', help='Connect only to the local fixture at 127.0.0.1:18765')

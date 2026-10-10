@@ -1,16 +1,19 @@
-# Verification — 2026-10-10, incremental history and local state
+# Verification — 2026-10-10, apron-gtk presence and attachments
 
 All network testing used synthetic data on dedicated loopback listeners. No
 production service, real credential, bot process/state, or real chat content
-was used. Existing reference repositories remained unchanged. Native source is
-on its own `feat/native-wayland` branch. No push, merge, or deployment occurred.
+was used. Existing reference repositories remained unchanged. The project was renamed from apron-native to apron-gtk while preserving Git
+history, legacy local-state lookup, and the original keyring schema. Source is
+on its own `feat/native-wayland` branch. Publication to the user-designated apron-chat/apron-gtk feature branch is
+separately authorized; main and deployment remain outside this milestone.
 
 ## Actual checks
 
-- **36 unit/fixture tests passed** (`test_*.py`): 30 pure state/action/rendering/
-  preferences/keyring/local-state/recovery tests and 6 actual libsoup WebSocket integration
-  tests against the fictional Python fixture at `127.0.0.1:18765`.
-- **3 official Go reference integration tests passed**, separately from the
+- **44 unit/fixture tests passed** (`test_*.py`): 35 state/action/rendering/
+  preferences/keyring/local-state/recovery/presence/naming tests, 6 libsoup WebSocket
+  integration tests against the fictional fixture at `127.0.0.1:18765`, and
+  3 media tests including a synthetic loopback HTTP server.
+- **4 official Go reference integration tests passed**, separately from the
   fixture tests. Built unchanged checkout
   `067083815be6b113e7d35f6569fa35dee0052fd5` with Go 1.27.1. Server identifies
   as `apron-go/8`; it ran at `127.0.0.1:18766/ws` with `--store memory`, a
@@ -35,6 +38,22 @@ on its own `feat/native-wayland` branch. No push, merge, or deployment occurred.
   reset confirmation, disk deletion, and no rewrite on close.
 - **Archived-page official-server reconciliation passed** with the cache cleared:
   later edits, deletes and moves replace original snapshots before display.
+- **Official-server presence/attachment test passed**: typing to another
+  connection, idle/attended transitions, timed room mute/unmute, upload embed
+  creation, HTTP PUT, final snapshot, byte-identical GET and rejected reuse of
+  the single-use write URL. The reference server rejects numeric idle with
+  `invalid_params`; the tested compatibility fallback uses boolean idle for
+  that connection, as the inspected web client does.
+- **Native presence/media flow passed**: new app ID, real composer user-action
+  signal, typing row, mute dialog, muted notification suppression, native upload
+  confirmation, repeated-submit guard, explicit save, retained composer draft,
+  and stale attachment refusal. File chooser callbacks were supplied synthetic
+  local paths deterministically; native dialogs, Gio file IO, protocol post and
+  HTTP transfers were real. Interactive file chooser/portal selection itself
+  was not automated.
+- HTTP safety tests verify absent Authorization/Cookie/Referer, blocked redirects
+  and cross-origin URLs, bounded unknown-length bodies, cancellation and local
+  file reads. All data and file paths were synthetic.
 - Python syntax compilation, `git diff --check`, and wheel build passed.
   Actual GTK screenshots were visually inspected at desktop and compact sizes,
   including dark theme, focus disclosure, forms and empty state. Captures are
@@ -83,6 +102,7 @@ GDK_BACKEND=wayland python tests/ui_recovery_smoke.py
 # With the isolated official Go server above running:
 python tests/reference_interop.py
 GDK_BACKEND=wayland python tests/ui_daily_smoke.py /tmp/apron-daily.png
+GDK_BACKEND=wayland python tests/ui_presence_media.py /tmp/apron-presence.png
 python scripts/seed_reference.py > /tmp/apron-benchmark-seed.json
 APRON_BENCH_ROOM=$(python -c 'import json; print(json.load(open("/tmp/apron-benchmark-seed.json"))["room_id"])') \
   GDK_BACKEND=wayland python tests/benchmark_ui.py
@@ -99,8 +119,9 @@ separate 1280×900 and 640×900 outputs. Client rendering used `GSK_RENDERER=cai
 Versions: Python 3.13, GTK 4.18.6, libadwaita 1.7.6, libsoup 3.6.5,
 Weston 14.0.2, markdown-it-py 3.0.0, websockets 15.0.1.
 
-## Current responsiveness measurement
+## Prior milestone responsiveness measurement
 
+Performance was not remeasured after the presence/attachment additions.
 The same 1,000-message, 1,045-byte-text synthetic benchmark room was used for
 both the visual-design baseline and incremental rendering. Both use native GTK,
 headless Weston/pixman and Cairo. No production traffic or content was used.
@@ -194,6 +215,7 @@ against Rust, apron-web, GPU rendering, or actual niri hardware.
 - Nix flake evaluation/build and actual niri launch (tools unavailable).
 - Full protocol conformance, comprehensive arbitrary-history recovery, aliases,
   real TLS endpoints, actual Secret Service operation, actual OS notifications,
+  interactive file chooser/portal selection, inline media playback,
   passkeys/email, closed-app push, long-duration load and assistive-tech audit.
 - Performance targets across hardware and large/high-churn multi-room workloads.
 

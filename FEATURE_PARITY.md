@@ -34,14 +34,14 @@ not every policy or browser edge case of the web implementation.
 | Copy message/code/user IDs (behavior copy) | Partial | Native clipboard message text/ID/member ID; no per-code-block copy button. |
 | Navigation search/autocomplete (behavior mentions/#/emoji) | Partial | Room filter and bounded loaded-message search. General server-side full-text search was not found in the inspected web client or protocol; native cache search is an extra with explicit scope. |
 | Browser back/forward and thread return (behavior navigation) | Partial | Alt+Up parent and Alt+N next unread; no full navigation-history stack. |
-| Typing activity (behavior activity) | Missing | Requires throttled composer events and expiring per-room indicators. |
+| Typing activity (behavior activity) | Implemented | User-edit signals, 15-second indicator/12-second refresh, five-second pause stop, room-switch stop, expiring bounded incoming map. |
 | Profile name/status (`ProfileBar`, `ProfileCard`) | Partial | Native profile/name and advertised status picker. Avatar upload, account linking, richer member status indicators missing. |
-| Presence idle/mute/DND/preferences (behavior status) | Partial | Own status can be set. No idle reporting, timed mutes, or notification policy matrix yet. |
+| Presence idle/mute/DND/preferences (behavior status) | Partial | Own status, input-based five-minute idle/attended transitions with old-server boolean fallback, global/room timed or indefinite mutes; parent mutes/DND suppress local notifications. No complete notification policy matrix or desktop-global idle integration. |
 | Unread/mentions/read markers (`UnreadTracker`, behavior unread) | Partial | Live creations, focus/bottom read, own cursors; optional durable cursors and bounded missed-history recovery for opened rooms. No all-room background recovery or edit-added mention alerts. |
 | Desktop/page notifications (`notifications.ts`) | Partial | Opt-in Gio.Notification mentions while inactive, content-free body and room activation. Real desktop notification daemon not available for delivery testing. |
 | Web push/service worker (behavior push) | Intentionally different | Native OS notifications while running; background push/closed-app wake not implemented. Need a Linux service design, not a browser service worker copy. |
-| Uploads, media, file preview/download (behavior embeds) | Missing | Safe inert text fallbacks only. Native file chooser/portal, bounded transfer, provenance policy still needed. |
-| Streaming/OpenGraph/trusted media (behavior embeds) | Missing | No remote resource fetch; security boundary intentionally conservative. |
+| Uploads, media, file preview/download (behavior embeds) | Partial | Native upload confirmation and explicit Save via file chooser; real single-use protocol PUT and GET, 8 MiB bounds, cancellation, no forwarded credentials or redirects. Same-origin only. No inline image/audio/video viewer, multiple-file composer, drag/drop or resume. |
+| Streaming/OpenGraph/trusted media (behavior embeds) | Missing | Only explicit same-origin upload-file transfers. OpenGraph media, streams and executable embeds stay inert; third-party origins are unsupported. |
 | Markdown/code/tables (behavior formatting) | Partial | CommonMark → restricted Pango; common formatting, inert links/media. Rich tables and interactive links absent. |
 | Commands (`commands.ts`, behavior commands) | Missing | Slash text remains ordinary text. Need capability-aware command controls and scoped notices. |
 | Appearance (`PreferencesDialog`, behavior appearance) | Partial | System/light/dark via libadwaita; no custom typography/size/sliders. |
@@ -50,10 +50,12 @@ not every policy or browser edge case of the web implementation.
 
 ## Current milestone and next work
 
-This milestone adds incremental timeline rendering, row reuse/scroll anchors,
-opt-in local draft/read persistence and fixed-horizon historical reconciliation.
-See `tests/ui_recovery_smoke.py`, `tests/test_recovery.py`, and the official-server
-archived edit/delete/move test in `tests/reference_interop.py`.
+This milestone names the client **apron-gtk** and adds typing/idle reporting,
+server-owned mutes and explicit bounded attachment transfers. Reviewed the same
+actual source snapshot, including `client.ts` sendTyping/setIdle/sendFiles,
+`notify-scopes.ts`, attachment tests and protocol §§4.5, 4.6 and 4.8.
+`tests/ui_presence_media.py` exercises the native controls with the official
+loopback server. `tests/test_naming.py` covers legacy local-state compatibility.
 
 Before claiming equivalent daily use, next priorities are:
 
@@ -61,8 +63,9 @@ Before claiming equivalent daily use, next priorities are:
    resumable recovery beyond the explicit scan budget.
 2. Actual Secret Service integration test, then email auth and a defensible
    native passkey path; a separate design for an encrypted/offline message cache.
-3. Typing/idle/mute, all-room unread recovery and edit-added mentions, richer navigation and member status.
-4. Bounded native upload/download/media handling and command/scoped-notice UI.
+3. All-room unread recovery and edit-added mentions, richer navigation and member status.
+4. Inline media viewing, multi-attachment/reply composition, broader origin policy,
+   and command/scoped-notice UI.
 5. Multi-message workflows, full emoji discovery, and remaining polish.
 
 No consequential product decision is required for the current safe defaults.

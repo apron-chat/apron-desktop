@@ -8,7 +8,12 @@ from .model import validate_url
 
 class Preferences:
     def __init__(self, directory=None):
-        base = directory or os.environ.get('APRON_NATIVE_STATE_DIR') or str(Path(os.environ.get('XDG_CONFIG_HOME', Path.home()/'.config')) / 'apron-native')
+        base = directory or os.environ.get('APRON_GTK_STATE_DIR') or os.environ.get('APRON_NATIVE_STATE_DIR')
+        if base is None:
+            config = Path(os.environ.get('XDG_CONFIG_HOME', Path.home()/'.config'))
+            modern, legacy = config/'apron-gtk', config/'apron-native'
+            # Reuse an existing legacy profile without copying secrets or splitting state.
+            base = legacy if not modern.exists() and legacy.exists() else modern
         self.path = Path(base)/'preferences.json'
         self.data = {'remember': False, 'theme': 'system', 'notifications': False}
         try:

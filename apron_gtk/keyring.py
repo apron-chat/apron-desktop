@@ -10,6 +10,7 @@ except (ImportError, ValueError):
 class Keyring:
     def __init__(self):
         self.available = Secret is not None
+        # Retain the original schema so existing secrets remain discoverable.
         self.schema = Secret.Schema.new('chat.apron.Native', Secret.SchemaFlags.NONE,
                                         {'server':Secret.SchemaAttributeType.STRING}) if self.available else None
 
@@ -22,7 +23,7 @@ class Keyring:
             try: callback(bool(Secret.password_store_finish(result)), None)
             except Exception: callback(None, 'Could not save the session in the system keyring. No file fallback was used.')
         Secret.password_store(self.schema, {'server':server}, Secret.COLLECTION_DEFAULT,
-                              'Apron session · ' + server, token, None, done)
+                              'apron-gtk session · ' + server, token, None, done)
 
     def lookup(self, server, callback):
         if not self.available: return self.unavailable(callback)
