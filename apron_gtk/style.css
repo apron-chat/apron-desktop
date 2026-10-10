@@ -1,0 +1,54 @@
+/* Apron: a restrained native system. 4/8/12/16/24 spacing, one accent,
+   native focus rings and color-scheme surfaces, 36px minimum controls. */
+@define-color accent_bg_color #147d70;
+@define-color accent_fg_color #ffffff;
+@define-color accent_color #147d70;
+window { background: @window_bg_color; }
+button { min-height: 28px; border-radius: 8px; }
+button.suggested-action { padding-left: 18px; padding-right: 18px; }
+.brand { font-size: 23px; font-weight: 750; letter-spacing: -0.6px; }
+.brand-icon { min-width: 34px; min-height: 34px; background: @accent_bg_color; color: white; border-radius: 11px; font-weight: 800; font-size: 22px; }
+.sidebar { background: @window_bg_color; border-right: 1px solid alpha(@window_fg_color, 0.08); }
+.sidebar searchentry { border-radius: 9px; background: alpha(@window_fg_color, 0.045); box-shadow: none; }
+.account-row { border-top: 1px solid alpha(@window_fg_color, 0.08); padding-top: 16px; }
+.room-list { background: transparent; }
+.room-list row { border-radius: 8px; margin: 2px 12px; padding: 7px 8px 7px 6px; border-left: 2px solid transparent; }
+.room-list row:selected { background: alpha(@accent_bg_color, 0.13); border-left-color: @accent_bg_color; }
+.room-list row:selected label { font-weight: 600; }
+.section-label { font-size: 12px; font-weight: 650; color: alpha(@window_fg_color, 0.65); }
+.conversation { background: @view_bg_color; }
+.conversation headerbar { background: @view_bg_color; border-bottom: 1px solid alpha(@window_fg_color, 0.06); padding-top: 6px; padding-bottom: 6px; }
+.room-title { font-size: 17px; font-weight: 700; }
+.message-row { padding: 4px 0; border-radius: 10px; }
+.message { padding: 2px 0 8px; }
+.message.mentioned { border-left: 3px solid alpha(#cb9a36, 0.8); padding-left: 12px; background: alpha(#cb9a36, 0.055); border-radius: 6px; }
+.author { font-weight: 650; }
+.avatar { min-width: 34px; min-height: 34px; border-radius: 11px; background: alpha(@accent_bg_color, 0.12); color: @window_fg_color; font-size: 13px; font-weight: 700; }
+.message-body { font-size: 14px; line-height: 1.4; }
+.metadata, .connection { font-size: 12px; color: alpha(@window_fg_color, 0.67); }
+.message-actions { opacity: 0; transition: opacity 120ms ease; }
+.message-row:hover .message-actions, .message-row:focus-within .message-actions { opacity: 1; }
+.message-actions button { min-height: 28px; }
+.reply-button { min-width: 48px; padding: 2px 8px; }
+.reply-quote { border-left: 2px solid alpha(@window_fg_color, 0.18); padding-left: 10px; font-size: 13px; color: alpha(@window_fg_color, 0.65); }
+.reply-strip { border-left: 3px solid @accent_bg_color; padding-left: 12px; }
+.composer { border: 1px solid alpha(@window_fg_color, 0.14); border-radius: 14px; padding: 12px 14px 10px; background: @view_bg_color; }
+.composer:focus-within { border-color: @accent_bg_color; box-shadow: 0 0 0 1px alpha(@accent_bg_color, 0.15); }
+.composer textview, .composer textview text { background: transparent; font-size: 14px; }
+.composer-placeholder { color: alpha(@window_fg_color, 0.5); font-size: 14px; }
+.history-control { font-size: 12px; color: alpha(@window_fg_color, 0.65); }
+.badge { background: alpha(@accent_bg_color, 0.14); border-radius: 12px; padding: 2px 7px; font-size: 11px; font-weight: 700; }
+.warning { color: @error_color; }
+.dialog-title { font-size: 15px; font-weight: 700; }
+.dialog-content { padding-top: 4px; }
+.dialog-content entry, .dialog-content dropdown { min-height: 36px; }
+.dialog-content textview { padding: 10px; border-radius: 8px; }
+.dialog-actions { margin-top: 8px; }
+.dialog-actions button { min-width: 80px; min-height: 32px; }
+
+.dialog-content .dim-label { opacity: 1; color: alpha(@window_fg_color, 0.72); }
+
+.empty-state image { -gtk-icon-size: 64px; }
+.empty-state .title { font-size: 22px; }
+
+.attachment { padding: 8px 12px; border-radius: 8px; background: alpha(@window_fg_color, 0.035); }

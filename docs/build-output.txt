@@ -1,0 +1,13 @@
+Processing ./.
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Getting requirements to build wheel: started
+  Getting requirements to build wheel: finished with status 'done'
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Building wheels for collected packages: apron-gtk
+  Building wheel for apron-gtk (pyproject.toml): started
+  Building wheel for apron-gtk (pyproject.toml): finished with status 'done'
+  Created wheel for apron-gtk: filename=apron_gtk-0.1.0-py3-none-any.whl size=44359 sha256=eb3645e8a32d5c5a1e835d81b53c8aaf73d17953afb006e270d283832b5afe1b
+  Stored in directory: /tmp/pip-ephem-wheel-cache-5eooc38g/wheels/2c/e5/53/cea235e7780c0aeae0c9dae347534caf0edc91ea79cd654ed1
+Successfully built apron-gtk

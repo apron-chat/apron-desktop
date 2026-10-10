@@ -1,0 +1,100 @@
+test_complete_user_replaces_cleared_fields (test_actions.DailyActionTests.test_complete_user_replaces_cleared_fields) ... ok
+test_delete_minimal_and_stale_action_conflict (test_actions.DailyActionTests.test_delete_minimal_and_stale_action_conflict) ... ok
+test_edit_move_preserve_all_client_fields (test_actions.DailyActionTests.test_edit_move_preserve_all_client_fields) ... ok
+test_keyring_async_adapter_calls_only_secret_service (test_actions.DailyActionTests.test_keyring_async_adapter_calls_only_secret_service) ... ok
+test_keyring_unavailable_has_no_file_fallback (test_actions.DailyActionTests.test_keyring_unavailable_has_no_file_fallback) ... ok
+test_membership_replay_and_room_edit_keep_member_snapshot (test_actions.DailyActionTests.test_membership_replay_and_room_edit_keep_member_snapshot) ... ok
+test_preferences_never_store_tokens_or_chat_and_opt_out_clears_address (test_actions.DailyActionTests.test_preferences_never_store_tokens_or_chat_and_opt_out_clears_address) ... ok
+test_reaction_replay_per_user_and_empty_set (test_actions.DailyActionTests.test_reaction_replay_per_user_and_empty_set) ... ok
+test_redaction_can_replace_content_at_same_log_position (test_actions.DailyActionTests.test_redaction_can_replace_content_at_same_log_position) ... ok
+test_serialized_keyring_rotation_then_forget (test_actions.DailyActionTests.test_serialized_keyring_rotation_then_forget) ... ok
+test_coalescing_preserves_distinct_accounts_and_latest_write (test_local_state.LocalStateTests.test_coalescing_preserves_distinct_accounts_and_latest_write) ... ok
+test_limits_corruption_and_allowlist (test_local_state.LocalStateTests.test_limits_corruption_and_allowlist) ... Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+ok
+test_restore_during_active_reset_cannot_read_old_disk_state (test_local_state.LocalStateTests.test_restore_during_active_reset_cannot_read_old_disk_state) ... ok
+test_roundtrip_isolation_permissions_and_reset (test_local_state.LocalStateTests.test_roundtrip_isolation_permissions_and_reset) ... ok
+test_serialized_reset_wins (test_local_state.LocalStateTests.test_serialized_reset_wins) ... ok
+test_attachment_batch_limits (test_media.MediaTests.test_attachment_batch_limits) ... ok
+test_get_put_have_no_auth_cookies_or_redirects (test_media.MediaTests.test_get_put_have_no_auth_cookies_or_redirects) ...
+(process:9969): dconf-CRITICAL **: 00:33:12.670: unable to create directory '/home/agent/.cache/dconf': Read-only file system.  dconf will not work properly.
+
+(process:9969): dconf-CRITICAL **: 00:33:12.670: unable to create directory '/home/agent/.cache/dconf': Read-only file system.  dconf will not work properly.
+
+(process:9969): dconf-CRITICAL **: 00:33:12.670: unable to create directory '/home/agent/.cache/dconf': Read-only file system.  dconf will not work properly.
+
+(process:9969): dconf-CRITICAL **: 00:33:12.670: unable to create directory '/home/agent/.cache/dconf': Read-only file system.  dconf will not work properly.
+
+(process:9969): dconf-CRITICAL **: 00:33:12.670: unable to create directory '/home/agent/.cache/dconf': Read-only file system.  dconf will not work properly.
+
+(process:9969): dconf-CRITICAL **: 00:33:12.670: unable to create directory '/home/agent/.cache/dconf': Read-only file system.  dconf will not work properly.
+
+(process:9969): dconf-CRITICAL **: 00:33:12.670: unable to create directory '/home/agent/.cache/dconf': Read-only file system.  dconf will not work properly.
+
+(process:9969): dconf-CRITICAL **: 00:33:12.670: unable to create directory '/home/agent/.cache/dconf': Read-only file system.  dconf will not work properly.
+
+(process:9969): dconf-CRITICAL **: 00:33:12.670: unable to create directory '/home/agent/.cache/dconf': Read-only file system.  dconf will not work properly.
+
+(process:9969): dconf-CRITICAL **: 00:33:12.670: unable to create directory '/home/agent/.cache/dconf': Read-only file system.  dconf will not work properly.
+ok
+test_origin_and_scheme_policy (test_media.MediaTests.test_origin_and_scheme_policy) ... ok
+test_unknown_length_bound_cancel_and_local_file (test_media.MediaTests.test_unknown_length_bound_cancel_and_local_file) ... ok
+test_bounded_memory (test_model.ModelTests.test_bounded_memory) ... ok
+test_byte_budget_and_partial_read_cursor (test_model.ModelTests.test_byte_budget_and_partial_read_cursor) ... ok
+test_current_user_merge_and_room_replay (test_model.ModelTests.test_current_user_merge_and_room_replay) ... ok
+test_embedded_snapshot (test_model.ModelTests.test_embedded_snapshot) ... ok
+test_markdown_never_passes_untrusted_markup (test_model.ModelTests.test_markdown_never_passes_untrusted_markup) ... ok
+test_mentions_are_explicit_and_history_does_not_notify (test_model.ModelTests.test_mentions_are_explicit_and_history_does_not_notify) ... ok
+test_numeric_ids_are_not_lexicographic (test_model.ModelTests.test_numeric_ids_are_not_lexicographic) ... ok
+test_pagination_uses_log_bounds_not_compacted_messages (test_model.ModelTests.test_pagination_uses_log_bounds_not_compacted_messages) ... ok
+test_retention_removes_unverifiable_cache (test_model.ModelTests.test_retention_removes_unverifiable_cache) ... ok
+test_safe_url (test_model.ModelTests.test_safe_url) ... ok
+test_snapshot_replay_edit_move_delete (test_model.ModelTests.test_snapshot_replay_edit_move_delete) ... ok
+test_existing_legacy_state_directory_is_reused (test_naming.NamingTests.test_existing_legacy_state_directory_is_reused) ... ok
+test_new_override_wins_and_old_override_still_works (test_naming.NamingTests.test_new_override_wins_and_old_override_still_works) ... ok
+test_expiry_stop_own_and_bounds (test_presence.PresenceTests.test_expiry_stop_own_and_bounds) ... ok
+test_muting_parent_global_timed_and_cycles (test_presence.PresenceTests.test_muting_parent_global_timed_and_cycles) ... ok
+test_throttle_stop_and_idle_transition_requests (test_presence.PresenceTests.test_throttle_stop_and_idle_transition_requests) ... ok
+test_gap_nonprogress_budget_and_cancel (test_recovery.RecoveryTests.test_gap_nonprogress_budget_and_cancel) ... ok
+test_inclusive_forward_cursors_and_fixed_horizon (test_recovery.RecoveryTests.test_inclusive_forward_cursors_and_fixed_horizon) ... ok
+test_newer_live_snapshot_wins_and_deleted_unread_clears (test_recovery.RecoveryTests.test_newer_live_snapshot_wins_and_deleted_unread_clears) ... ok
+test_older_page_reconciles_edit_delete_and_move (test_recovery.RecoveryTests.test_older_page_reconciles_edit_delete_and_move) ... ok
+test_retention_invalidates_original_page_during_suffix_scan (test_recovery.RecoveryTests.test_retention_invalidates_original_page_during_suffix_scan) ... ok
+test_auth_listing_history_pagination_send_reply_and_thread (test_session.SessionTests.test_auth_listing_history_pagination_send_reply_and_thread) ... ok
+test_cancelled_room_load_does_not_apply_or_call_back (test_session.SessionTests.test_cancelled_room_load_does_not_apply_or_call_back) ... ok
+test_denied_token_stops_without_guest_fallback (test_session.SessionTests.test_denied_token_stops_without_guest_fallback) ... ok
+test_read_cursor_recovers_missed_mentions_and_is_idempotent (test_session.SessionTests.test_read_cursor_recovers_missed_mentions_and_is_idempotent) ... ok
+test_reconnect_token_and_uncertain_send (test_session.SessionTests.test_reconnect_token_and_uncertain_send) ... ok
+test_send_error_preserves_error_and_no_automatic_retry (test_session.SessionTests.test_send_error_preserves_error_and_no_automatic_retry) ... ok
+
+----------------------------------------------------------------------
+Ran 46 tests in 3.440s
+
+OK

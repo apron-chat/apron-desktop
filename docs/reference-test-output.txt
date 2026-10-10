@@ -1,0 +1,29 @@
+test_archived_page_forward_reconciliation (__main__.OfficialGoInterop.test_archived_page_forward_reconciliation) ...
+(process:9723): dconf-CRITICAL **: 00:31:20.620: unable to create directory '/home/agent/.cache/dconf': Read-only file system.  dconf will not work properly.
+
+(process:9723): dconf-CRITICAL **: 00:31:20.620: unable to create directory '/home/agent/.cache/dconf': Read-only file system.  dconf will not work properly.
+
+(process:9723): dconf-CRITICAL **: 00:31:20.620: unable to create directory '/home/agent/.cache/dconf': Read-only file system.  dconf will not work properly.
+
+(process:9723): dconf-CRITICAL **: 00:31:20.620: unable to create directory '/home/agent/.cache/dconf': Read-only file system.  dconf will not work properly.
+
+(process:9723): dconf-CRITICAL **: 00:31:20.620: unable to create directory '/home/agent/.cache/dconf': Read-only file system.  dconf will not work properly.
+
+(process:9723): dconf-CRITICAL **: 00:31:20.621: unable to create directory '/home/agent/.cache/dconf': Read-only file system.  dconf will not work properly.
+
+(process:9723): dconf-CRITICAL **: 00:31:20.621: unable to create directory '/home/agent/.cache/dconf': Read-only file system.  dconf will not work properly.
+
+(process:9723): dconf-CRITICAL **: 00:31:20.621: unable to create directory '/home/agent/.cache/dconf': Read-only file system.  dconf will not work properly.
+
+(process:9723): dconf-CRITICAL **: 00:31:20.621: unable to create directory '/home/agent/.cache/dconf': Read-only file system.  dconf will not work properly.
+
+(process:9723): dconf-CRITICAL **: 00:31:20.621: unable to create directory '/home/agent/.cache/dconf': Read-only file system.  dconf will not work properly.
+ok
+test_connect_list_history_send_reply_thread_and_reconnect (__main__.OfficialGoInterop.test_connect_list_history_send_reply_thread_and_reconnect) ... ok
+test_daily_message_and_room_actions (__main__.OfficialGoInterop.test_daily_message_and_room_actions) ... ok
+test_presence_mutes_and_upload_download (__main__.OfficialGoInterop.test_presence_mutes_and_upload_download) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 1.953s
+
+OK

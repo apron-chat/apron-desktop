@@ -1,0 +1,11 @@
+ui-presence-media-review
+Screenshot saved: docs/attachments-confirm.png
+Screenshot saved: /tmp/apron-batch.png
+PASS: apron-gtk identity, typing row and user-action signal, room mute and notification suppression, confirmed two-file reply, duplicate guard, explicit download/save, composer clear after acceptance, changed-draft preservation, partial failure stops batch, stale attachment refusal
+
+ui-recovery-review
+PASS: scroll anchor/row reuse, rapid room switching, bounded rows/cache, interrupted reconnect, durable draft/reply/mention restore, reset without rewrite
+
+ui-daily-review
+Screenshot saved: /tmp/apron-daily.png
+PASS: official-server native dialogs; repeated create/save; stale-edit refusal; interrupted-edit refusal; profile; search; room details; preferences; lazy menu; clipboard
