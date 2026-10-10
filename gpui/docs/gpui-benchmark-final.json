@@ -1,0 +1,31 @@
+{
+  "renderer": "native Wayland / Mesa llvmpipe software Vulkan",
+  "profile": "release",
+  "seed_messages": 1000,
+  "seed_text_bytes_each": 1045,
+  "startup_to_first_history_ms": 57.64975,
+  "benchmark_room_latest_page_ms": 46.206446,
+  "older_page_ms": [
+    34.20066,
+    37.60984300000001,
+    34.16550600000001,
+    36.36277100000001,
+    34.037448999999995,
+    35.219109,
+    37.83281799999999,
+    35.841902000000005,
+    41.609722000000005,
+    33.116609999999994
+  ],
+  "max_10ms_heartbeat_interval_during_load_ms": 57.869757,
+  "idle_seconds": 10.009641181,
+  "idle_cpu_seconds": 1.82,
+  "idle_percent_one_core": 18.18246995161694,
+  "rss_mib": 144.90625,
+  "cached_messages": 549,
+  "cached_serialized_bytes": 664290,
+  "transcript_records": 549,
+  "total_row_renderer_calls": 120,
+  "max_view_description_us": 344,
+  "scope": "UI heartbeat includes scheduling/layout/rendering delay, not GPU presentation latency. View-description time excludes layout/paint. Single warm run; no hardware-GPU claim."
+}

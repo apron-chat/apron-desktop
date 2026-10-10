@@ -1,0 +1,164 @@
+//! Explicitly opt in: these tests use only dedicated synthetic loopback servers.
+use apron_gpui::{
+    media,
+    model::{number, text},
+    transport::{Bridge, Client, Command, Event},
+};
+use serde_json::json;
+use std::time::Duration;
+const OFFICIAL: &str = "ws://127.0.0.1:18766/ws";
+#[tokio::test]
+#[ignore = "requires the dedicated official loopback Apron server"]
+async fn official_history_reply_upload_and_reconnect() {
+    let mut c = Client::connect(OFFICIAL, None).await.unwrap();
+    let auth = c.guest().await.unwrap();
+    assert!(auth["you"]["user_id"].is_string());
+    let rooms = c.rpc("room_list", json!({"filter":"all"})).await.unwrap();
+    assert!(
+        rooms["joined"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["room_id"] == "general")
+    );
+    let room = c
+        .rpc("room_set", json!({"title":"Synthetic GPUI interop"}))
+        .await
+        .unwrap();
+    let rid = text(&room["room_id"]);
+    let mut ids = Vec::new();
+    for i in 0..65 {
+        let m = c
+            .rpc(
+                "message",
+                json!({"room_id":rid,"body":{"text":format!("Synthetic row {i}")}}),
+            )
+            .await
+            .unwrap();
+        ids.push(m["message_id"].clone());
+    }
+    let latest = c.history(rid, None).await.unwrap();
+    assert_eq!(latest["messages"].as_array().unwrap().len(), 50);
+    assert_eq!(latest["more"], true);
+    let before = number(&latest["first_log_id"]).unwrap() - 1;
+    let older = c.history(rid, Some(before)).await.unwrap();
+    assert!(older["messages"].as_array().unwrap().len() >= 15);
+    let posted=c.rpc("message",json!({"room_id":rid,"reply_to":{"message_id":ids[0]},"body":{"text":"Two synthetic files","embeds":[{"kind":"upload","title":"one.txt"},{"kind":"upload","title":"two.txt"}]}})).await.unwrap();
+    let urls = posted["embeds"].as_array().unwrap();
+    assert_eq!(urls.len(), 2);
+    for (i, e) in urls.iter().enumerate() {
+        media::put(
+            text(&e["write_url"]),
+            OFFICIAL,
+            format!("Synthetic bytes {i}").into_bytes(),
+        )
+        .await
+        .unwrap();
+    }
+    let page = c.history(rid, None).await.unwrap();
+    let msg = page["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|m| m["message_id"] == posted["message_id"])
+        .unwrap();
+    assert_eq!(msg["reply_to"]["message_id"], ids[0]);
+    for (i, e) in msg["body"]["embeds"].as_array().unwrap().iter().enumerate() {
+        assert_eq!(
+            media::get(text(&e["url"]), OFFICIAL).await.unwrap(),
+            format!("Synthetic bytes {i}").into_bytes()
+        );
+    }
+    assert!(
+        media::put(text(&urls[0]["write_url"]), OFFICIAL, b"retry".to_vec())
+            .await
+            .is_err()
+    );
+    drop(c);
+    let mut resumed = Client::connect(OFFICIAL, None).await.unwrap();
+    resumed.guest().await.unwrap();
+    assert!(!resumed.history("general", None).await.unwrap()["messages"].is_null());
+}
+#[tokio::test]
+#[ignore = "requires the synthetic fixture on port 18765"]
+async fn actor_reports_interruption_without_resending() {
+    let bridge = Bridge::start("ws://127.0.0.1:18765/ws".into()).unwrap();
+    async fn next(b: &Bridge) -> Event {
+        tokio::time::timeout(Duration::from_secs(12), b.events.recv())
+            .await
+            .unwrap()
+            .unwrap()
+    }
+    loop {
+        if matches!(next(&bridge).await, Event::Ready { .. }) {
+            break;
+        }
+    }
+    bridge
+        .commands
+        .send(Command::History {
+            generation: 11,
+            room: "general".into(),
+            before: None,
+        })
+        .await
+        .unwrap();
+    loop {
+        if let Event::History { generation, .. } = next(&bridge).await {
+            assert_eq!(generation, 11);
+            break;
+        }
+    }
+    bridge
+        .commands
+        .send(Command::Send {
+            generation: 12,
+            room: "general".into(),
+            text: "/test-disconnect".into(),
+            reply: None,
+            files: vec![],
+        })
+        .await
+        .unwrap();
+    let mut failed = false;
+    loop {
+        match next(&bridge).await {
+            Event::Failure {
+                generation: Some(12),
+                ..
+            } => failed = true,
+            Event::Ready { .. } => {
+                assert!(failed);
+                break;
+            }
+            Event::Sent { generation: 12, .. } => panic!("Disconnected send claimed success"),
+            _ => {}
+        }
+    }
+    bridge
+        .commands
+        .send(Command::History {
+            generation: 13,
+            room: "general".into(),
+            before: None,
+        })
+        .await
+        .unwrap();
+    loop {
+        if let Event::History {
+            generation, page, ..
+        } = next(&bridge).await
+        {
+            assert_eq!(generation, 13);
+            assert!(
+                !page["messages"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|m| m["body"]["text"] == "/test-disconnect")
+            );
+            break;
+        }
+    }
+}
