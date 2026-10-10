@@ -52,6 +52,11 @@ async fn right_click(position: Point<Pixels>, cx: &mut AsyncWindowContext) {
     settle(cx).await;
 }
 async fn run(view: WeakEntity<Conversation>, output: String, cx: &mut AsyncWindowContext) {
+    let fixture_id = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+        + 100_000;
     wait(&view, cx, |v, _| {
         v.ready && !v.loading && v.rows.len() >= 30
     })
@@ -109,8 +114,33 @@ async fn run(view: WeakEntity<Conversation>, output: String, cx: &mut AsyncWindo
             .unwrap(),
         Some(expected)
     );
+    // Deliberately clip the first row header before keyboard traversal.
+    view.update_in(cx, |v, _, cx| {
+        v.scroller.update(cx, |s, cx| {
+            s.scroll_to_item(0, cx);
+        });
+    })
+    .unwrap();
+    settle(cx).await;
+    cx.update(|w, cx| {
+        w.dispatch_event(
+            ScrollWheelEvent {
+                position: point(px(350.), px(220.)),
+                delta: ScrollDelta::Pixels(point(px(0.), px(-32.))),
+                touch_phase: TouchPhase::Moved,
+                modifiers: Modifiers::default(),
+            }
+            .to_platform_input(),
+            cx,
+        )
+    })
+    .unwrap();
+    settle(cx).await;
+    stage(&output, "partial-before-focus", cx).await;
     cx.update(|w, cx| key("ctrl-k", w, cx)).unwrap();
     settle(cx).await;
+    view.update_in(cx, |v, _, _| *v.focused_row.borrow_mut() = None)
+        .unwrap();
     let mut reached_message = false;
     for _ in 0..40 {
         cx.update(|w, cx| key("tab", w, cx)).unwrap();
@@ -125,6 +155,15 @@ async fn run(view: WeakEntity<Conversation>, output: String, cx: &mut AsyncWindo
     }
     assert!(reached_message, "Tab never reached message actions");
     stage(&output, "keyboard-message-focus", cx).await;
+    view.update_in(cx, |v, _, _| {
+        let (_, bounds) = v.focused_row.borrow().expect("Focused message geometry");
+        let viewport = *v.transcript_bounds.borrow();
+        assert!(
+            bounds.top() >= viewport.top() && bounds.top() + px(32.) <= viewport.bottom(),
+            "Focused message actions clipped: {bounds:?} in {viewport:?}"
+        );
+    })
+    .unwrap();
     cx.update(|w, cx| key("r", w, cx)).unwrap();
     settle(cx).await;
     assert!(
@@ -144,7 +183,7 @@ async fn run(view: WeakEntity<Conversation>, output: String, cx: &mut AsyncWindo
     .unwrap();
     stage(&output, "filter-empty", cx).await;
     view.update_in(cx,|v,w,cx| {v.filter.update(cx,|s,cx|s.set_value("",w,cx));
-        v.event(Event::Notice(serde_json::json!({"method":"message","params":{"message_id":"1791536500000","log_id":"1791536500000","room_id":"design","from":{"user_id":"synthetic-ada","name":"Ada"},"body":{"text":"A synthetic background mention.","mentions":["demo_you"]}}})),w,cx);
+        v.event(Event::Notice(serde_json::json!({"method":"message","params":{"message_id":fixture_id.to_string(),"log_id":fixture_id.to_string(),"room_id":"design","from":{"user_id":"synthetic-ada","name":"Ada"},"body":{"text":"A synthetic background mention.","mentions":["demo_you"]}}})),w,cx);
         assert_eq!(v.attention.counts("design"),(1,1));
     }).unwrap();
     view.update_in(cx, |v, _, cx| {
@@ -153,7 +192,7 @@ async fn run(view: WeakEntity<Conversation>, output: String, cx: &mut AsyncWindo
     .unwrap();
     settle(cx).await;
     view.update_in(cx, |v,w,cx| {
-        v.event(Event::Notice(serde_json::json!({"method":"message","params":{"message_id":"1791536500002","log_id":"1791536500002","room_id":"general","from":{"user_id":"synthetic-ada","name":"Ada"},"body":{"text":"A synthetic message received while reading earlier history."}}})),w,cx);
+        v.event(Event::Notice(serde_json::json!({"method":"message","params":{"message_id":(fixture_id+2).to_string(),"log_id":(fixture_id+2).to_string(),"room_id":"general","from":{"user_id":"synthetic-ada","name":"Ada"},"body":{"text":"A synthetic message received while reading earlier history."}}})),w,cx);
         assert_eq!(v.attention.counts("general"),(1,0),"Reading earlier history must not clear new messages");
     }).unwrap();
     stage(&output, "unread", cx).await;
@@ -274,7 +313,7 @@ async fn run(view: WeakEntity<Conversation>, output: String, cx: &mut AsyncWindo
         .unwrap();
     wait(&view, cx, |v, _| !v.loading).await;
     stage(&output, "empty-room", cx).await;
-    view.update_in(cx,|v,w,cx|v.event(Event::Notice(serde_json::json!({"method":"message","params":{"message_id":"1791536500001","log_id":"1791536500001","room_id":"design","from":{"user_id":"synthetic-ada","name":"Ada with a deliberately long synthetic display name"},"body":{"format":"markdown","text":format!("# Long-message layout\n\n{}\n\n```rust\nfn example() {{ println!(\"synthetic only\"); }}\n```", "A long paragraph should wrap inside the conversation without widening the window. ".repeat(18))}}})),w,cx)).unwrap();
+    view.update_in(cx,|v,w,cx|v.event(Event::Notice(serde_json::json!({"method":"message","params":{"message_id":(fixture_id+1).to_string(),"log_id":(fixture_id+1).to_string(),"room_id":"design","from":{"user_id":"synthetic-ada","name":"Ada with a deliberately long synthetic display name"},"body":{"format":"markdown","text":format!("# Long-message layout\n\n{}\n\n```rust\nfn example() {{ println!(\"synthetic only\"); }}\n```", "A long paragraph should wrap inside the conversation without widening the window. ".repeat(18))}}})),w,cx)).unwrap();
     settle(cx).await;
     stage(&output, "long-message", cx).await;
     view.update_in(cx, |v, w, cx| v.select("general".into(), w, cx))

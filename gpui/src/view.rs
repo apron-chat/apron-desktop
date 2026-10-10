@@ -1,3 +1,9 @@
+pub(crate) mod daily;
+mod edit;
+mod focus;
+mod images;
+mod local;
+mod mentions;
 use apron_gpui::{
     attention::Attention,
     auth::Secret,
@@ -5,6 +11,7 @@ use apron_gpui::{
     model::{self, Message, Store},
     transport::{Bridge, Command, Event},
 };
+pub(crate) use edit::SaveEdit;
 use gpui_kit::component::{
     ActiveTheme, Disableable, IconName, Selectable, Sizable, WindowExt,
     button::{Button, ButtonVariants},
@@ -30,21 +37,48 @@ actions!(
         FindRoom,
         MarkRead,
         OpenSession,
-        ShowHelp
+        ShowHelp,
+        OpenPrivacy,
+        EditMessage,
+        DeleteMessage,
+        MentionNext,
+        MentionPrevious,
+        MentionAccept,
+        PasteImage,
+        NextMention
     ]
 );
+type FocusGeometry = Rc<std::cell::RefCell<Option<(u64, Bounds<Pixels>)>>>;
 pub struct Conversation {
     pub(crate) store: Store,
     pub(crate) rows: Rc<Vec<Arc<Message>>>,
     pub(crate) scroller: Entity<MessageScrollerState>,
     pub(crate) composer: Entity<TextareaState>,
     bridge: Bridge,
+    local_worker: apron_gpui::local_state::Worker,
+    profile: Option<apron_gpui::local_state::Profile>,
+    local_enabled: bool,
+    local_loading: bool,
+    local_epoch: u64,
+    local_status: String,
+    local_error: String,
+    local_save: Option<Task<()>>,
+    draft_revision: u64,
+    privacy_form: Option<WeakEntity<local::PrivacyForm>>,
+    anchor_unread: bool,
+    local_touched: std::collections::BTreeSet<String>,
+    mutation: Option<WeakEntity<edit::MutationForm>>,
+    mutation_serial: u64,
+    mutation_pending: Option<u64>,
     server: String,
     pub(crate) authenticated: bool,
     pub(crate) attention: Attention,
     pub(crate) filter: Entity<InputState>,
     pub(crate) session_form: Option<WeakEntity<crate::session::SessionForm>>,
     rooms: BTreeMap<String, Value>,
+    users: BTreeMap<String, Value>,
+    draft_mentions: BTreeMap<String, std::collections::BTreeSet<String>>,
+    mention_index: usize,
     pub(crate) room: String,
     pub(crate) ready: bool,
     pub(crate) loading: bool,
@@ -56,6 +90,11 @@ pub struct Conversation {
     you: String,
     drafts: BTreeMap<String, (String, Option<u64>)>,
     files: Vec<Attachment>,
+    staged_images: BTreeMap<String, Arc<Image>>,
+    image_cache: BTreeMap<String, Arc<Image>>,
+    image_errors: BTreeMap<String, String>,
+    clipboard_task: Option<Task<()>>,
+    clipboard_serial: u64,
     caps: Vec<String>,
     status: String,
     pub(crate) error: String,
@@ -66,6 +105,8 @@ pub struct Conversation {
     conversation_menu_open: bool,
     pub(crate) rendered_rows: std::cell::Cell<usize>,
     pub(crate) max_render_us: u128,
+    pub(crate) transcript_bounds: Rc<std::cell::RefCell<Bounds<Pixels>>>,
+    pub(crate) focused_row: FocusGeometry,
     pub(crate) geometry: Rc<std::cell::RefCell<BTreeMap<u64, Bounds<Pixels>>>>,
     pub(crate) inspect: bool,
     _events: Task<()>,
@@ -93,7 +134,42 @@ impl Conversation {
             ) {
                 this.send(window, cx);
             }
+            if matches!(event, InputEvent::Change) {
+                this.draft_revision += 1;
+                this.local_touched.insert(this.room.clone());
+                if !this.room.is_empty() {
+                    this.drafts.insert(
+                        this.room.clone(),
+                        (this.composer.read(cx).value().to_string(), this.reply),
+                    );
+                }
+                this.schedule_local(cx);
+            }
             cx.notify();
+        });
+        let quit = cx.on_app_quit(|this, cx| {
+            this.local_save = None;
+            let rx = if this.local_enabled {
+                this.profile.clone().and_then(|p| {
+                    this.local_worker
+                        .submit(apron_gpui::local_state::Operation::Save(
+                            p,
+                            this.local_snapshot(cx),
+                        ))
+                        .ok()
+                })
+            } else {
+                None
+            };
+            async move {
+                if let Some(rx) = rx {
+                    let _ = rx.recv().await;
+                }
+            }
+        });
+        window.on_window_should_close(cx, |_, cx| {
+            cx.quit();
+            false
         });
         let observation = cx.observe_in(&scroller, window, |this, _, window, cx| {
             this.read_visible(window, cx);
@@ -118,12 +194,32 @@ impl Conversation {
             scroller,
             composer,
             bridge,
+            local_worker: apron_gpui::local_state::Worker::start(
+                apron_gpui::local_state::Backend::default_location(),
+            ),
+            profile: None,
+            local_enabled: false,
+            local_loading: false,
+            local_epoch: 0,
+            local_status: String::new(),
+            local_error: String::new(),
+            local_save: None,
+            draft_revision: 0,
+            privacy_form: None,
+            anchor_unread: false,
+            local_touched: Default::default(),
+            mutation: None,
+            mutation_serial: 0,
+            mutation_pending: None,
             server: url,
             authenticated: false,
             attention: Attention::default(),
             filter,
             session_form: None,
             rooms: BTreeMap::new(),
+            users: Default::default(),
+            draft_mentions: Default::default(),
+            mention_index: 0,
             room: String::new(),
             ready: false,
             loading: false,
@@ -135,6 +231,11 @@ impl Conversation {
             you: String::new(),
             drafts: BTreeMap::new(),
             files: Vec::new(),
+            staged_images: BTreeMap::new(),
+            image_cache: BTreeMap::new(),
+            image_errors: BTreeMap::new(),
+            clipboard_task: None,
+            clipboard_serial: 0,
             caps: Vec::new(),
             status: "Connecting…".into(),
             error: String::new(),
@@ -145,10 +246,18 @@ impl Conversation {
             conversation_menu_open: false,
             rendered_rows: std::cell::Cell::new(0),
             max_render_us: 0,
+            transcript_bounds: Default::default(),
+            focused_row: Default::default(),
             geometry: Rc::new(std::cell::RefCell::new(BTreeMap::new())),
             inspect: false,
             _events: task,
-            _subscriptions: vec![subscription, observation, activation, filter_subscription],
+            _subscriptions: vec![
+                subscription,
+                observation,
+                activation,
+                filter_subscription,
+                quit,
+            ],
         }
     }
     fn command(&mut self, command: Command, cx: &mut Context<Self>) -> bool {
@@ -160,9 +269,11 @@ impl Conversation {
             true
         }
     }
-    fn read_visible(&mut self, window: &Window, cx: &mut Context<Self>) {
+    fn read_visible(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.ready
+            && !self.local_loading
             && !self.loading
+            && !window.has_active_dialog(cx)
             && window.is_window_active()
             && self.scroller.read(cx).is_following_tail()
         {
@@ -178,6 +289,7 @@ impl Conversation {
                 room: self.room.clone(),
                 through: id,
             });
+            self.schedule_local(cx);
             cx.notify();
         }
     }
@@ -187,12 +299,20 @@ impl Conversation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.pending || self.transfer_busy {
+        if self.pending || self.transfer_busy || self.mutation_pending.is_some() {
             self.error =
                 "Finish the current send or cancel the transfer before changing sessions.".into();
             cx.notify();
             return;
         }
+        self.flush_local(cx);
+        self.local_save = None;
+        self.local_epoch += 1;
+        self.profile = None;
+        self.local_enabled = false;
+        self.local_loading = false;
+        self.draft_revision = 0;
+        self.local_touched.clear();
         let bridge = match Bridge::start_with_token(self.server.clone(), token) {
             Ok(b) => b,
             Err(_) => {
@@ -225,7 +345,13 @@ impl Conversation {
         self.rows = Rc::new(Vec::new());
         self.attention = Attention::default();
         self.drafts.clear();
+        self.draft_mentions.clear();
+        self.users.clear();
         self.files.clear();
+        self.staged_images.clear();
+        self.image_cache.clear();
+        self.image_errors.clear();
+        self.clipboard_task = None;
         self.reply = None;
         self.you.clear();
         self.composer
@@ -234,9 +360,12 @@ impl Conversation {
         cx.notify();
     }
     pub(crate) fn can_change_session(&self) -> bool {
-        !self.pending && !self.transfer_busy
+        !self.pending && !self.transfer_busy && self.mutation_pending.is_none()
     }
     pub(crate) fn session_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if window.has_active_dialog(cx) {
+            return;
+        }
         let owner = cx.weak_entity();
         let server = self.server.clone();
         let form = cx.new(|cx| crate::session::SessionForm::new(owner, server, window, cx));
@@ -262,6 +391,16 @@ impl Conversation {
     }
     fn listing(&mut self, list: &Value) {
         model::update_rooms(&mut self.rooms, list);
+        if let Some(users) = list["users"].as_array() {
+            for user in users.iter().take(1024) {
+                if let Some(id) = user["user_id"].as_str().filter(|id| id.len() <= 128) {
+                    self.users.insert(id.into(),serde_json::json!({"user_id":id,"name":model::clean(user["name"].as_str().unwrap_or(id),80).replace(['\n','\t']," ")}));
+                }
+            }
+        }
+        while self.users.len() > 1024 {
+            self.users.pop_first();
+        }
     }
     pub(crate) fn select(&mut self, room: String, window: &mut Window, cx: &mut Context<Self>) {
         if !self.room.is_empty() {
@@ -273,11 +412,18 @@ impl Conversation {
         while self.drafts.len() > 256 {
             self.drafts.pop_first();
         }
+        self.schedule_local(cx);
+        self.anchor_unread = true;
+        self.mention_index = 0;
         self.room = room;
         self.generation += 1;
         self.loading = false;
         self.pending = false;
         self.files.clear();
+        self.staged_images.clear();
+        self.image_cache.clear();
+        self.image_errors.clear();
+        self.clipboard_task = None;
         self.transfer.clear();
         self.before = None;
         self.more = false;
@@ -338,7 +484,26 @@ impl Conversation {
     }
     pub(crate) fn event(&mut self, event: Event, window: &mut Window, cx: &mut Context<Self>) {
         match event {
+            Event::Mutated { operation, result } => {
+                if self.mutation_pending == Some(operation) {
+                    self.mutation_pending = None;
+                }
+                if let Some(form) = self.mutation.as_ref().and_then(|f| f.upgrade()) {
+                    form.update(cx, |form, cx| {
+                        form.finished(operation, result.clone(), window, cx)
+                    });
+                }
+                if let Err(error) = result {
+                    self.error = error;
+                }
+            }
+
             Event::State(s) => {
+                if let Some(operation) = self.mutation_pending.take()
+                    && let Some(form) = self.mutation.as_ref().and_then(|f| f.upgrade())
+                {
+                    form.update(cx,|f,cx|f.finished(operation,Err("Connection changed; completion may be uncertain. Inspect the message before retrying.".into()),window,cx));
+                }
                 self.status = s;
                 self.ready = false;
                 self.loading = false;
@@ -357,6 +522,7 @@ impl Conversation {
                     self.attention = Attention::default();
                 }
                 self.you = you;
+                self.load_profile(window, cx);
                 self.rooms.clear();
                 self.listing(&rooms);
                 self.caps = caps;
@@ -416,6 +582,7 @@ impl Conversation {
                         model::number(&frame["params"]["read_message_id"]),
                     ) {
                         self.attention.mark_read(room, id);
+                        self.schedule_local(cx);
                     }
                 }
                 _ => {}
@@ -437,7 +604,9 @@ impl Conversation {
                     }
                 }
                 self.refresh(cx);
-                self.read_visible(window, cx);
+                let anchor = self.anchor_unread;
+                self.anchor_unread = false;
+                self.reconcile_attention(window, cx, anchor);
             }
             Event::Sent {
                 generation,
@@ -447,16 +616,46 @@ impl Conversation {
                 if generation == self.generation {
                     self.pending = false;
                     self.files.clear();
+                    self.staged_images.clear();
                     if self.composer.read(cx).value().as_ref() == text && self.reply == reply {
                         self.composer
                             .update(cx, |s, cx| s.set_value("", window, cx));
                         self.reply = None;
+                        self.draft_mentions.remove(&self.room);
                     }
                     self.transfer.clear();
+                    self.schedule_local(cx);
+                }
+            }
+            Event::Image {
+                generation,
+                key,
+                result,
+            } => {
+                if generation == self.generation && self.image_key_current(&key) {
+                    match result {
+                        Ok(raster) => {
+                            if self.image_cache.len() >= 8 {
+                                self.image_cache.clear();
+                            }
+                            self.image_errors.remove(&key);
+                            self.image_cache.insert(
+                                key,
+                                Arc::new(Image::from_bytes(ImageFormat::Png, raster.thumbnail)),
+                            );
+                        }
+                        Err(error) => {
+                            if self.image_errors.len() >= 16 {
+                                self.image_errors.clear();
+                            }
+                            self.image_errors.insert(key, model::clean(&error, 240));
+                        }
+                    }
                 }
             }
             Event::Files { generation, files } => {
                 if generation == self.generation {
+                    self.staged_images.clear();
                     self.files = files;
                     self.transfer = "Files ready. Review them below before sending.".into();
                 }
@@ -496,6 +695,11 @@ impl Conversation {
             Command::Send {
                 generation: self.generation,
                 room: self.room.clone(),
+                mentions: self
+                    .draft_mentions
+                    .get(&self.room)
+                    .map(|ids| apron_gpui::mentions::recipients(&text, ids))
+                    .unwrap_or_default(),
                 text,
                 reply: self.reply,
                 files: self.files.clone(),
@@ -586,8 +790,21 @@ impl Conversation {
         })
         .detach();
     }
-    fn row(m: Arc<Message>, owner: WeakEntity<Self>, cx: &mut App) -> AnyElement {
+    fn row(
+        m: Arc<Message>,
+        owner: WeakEntity<Self>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> AnyElement {
         let id = m.id;
+        let focus_owner = owner.clone();
+        let focus = window.use_keyed_state(("row-focus", id), cx, |w, cx| {
+            focus::RowFocus::new(id, focus_owner, w, cx)
+        });
+        let focus_bounds = focus.clone();
+        let focus_record = owner
+            .upgrade()
+            .and_then(|v| v.read(cx).inspect.then(|| v.read(cx).focused_row.clone()));
         let raw = &m.raw;
         let copy = model::clean(model::text(&raw["body"]["text"]), 32000);
         let name = model::clean(
@@ -606,6 +823,8 @@ impl Conversation {
                     .to_string()
             })
             .unwrap_or_default();
+        let edit_owner = owner.clone();
+        let delete_owner = owner.clone();
         let reply_owner = owner.clone();
         let menu_owner = owner.clone();
         let context_owner = owner.clone();
@@ -622,9 +841,32 @@ impl Conversation {
         let mut row = div()
             .id(("message", id))
             .group(group.clone())
+            .track_focus(&focus.read(cx).handle)
+            .relative()
+            .child(
+                canvas(
+                    move |bounds, w, cx| {
+                        if focus_bounds.read(cx).handle.contains_focused(w, cx)
+                            && let Some(record) = &focus_record
+                        {
+                            *record.borrow_mut() = Some((id, bounds));
+                        }
+                        focus_bounds.update(cx, |state, _| state.bounds = bounds);
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
             .key_context("Message")
             .on_action(move |_: &ReplyMessage, window, cx| {
                 let _ = reply_owner.update(cx, |v, cx| v.begin_reply(id, window, cx));
+            })
+            .on_action(move |_: &EditMessage, w, cx| {
+                let _ = edit_owner.update(cx, |v, cx| v.open_mutation(id, false, w, cx));
+            })
+            .on_action(move |_: &DeleteMessage, w, cx| {
+                let _ = delete_owner.update(cx, |v, cx| v.open_mutation(id, true, w, cx));
             })
             .on_action(move |_: &CopyMessage, _, cx| {
                 cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))
@@ -653,6 +895,14 @@ impl Conversation {
                             .text_color(cx.theme().muted_foreground)
                             .child(timestamp),
                     )
+                    .when(mentioned, |d| {
+                        d.child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().primary)
+                                .child("@ You"),
+                        )
+                    })
                     .child(div().flex_1())
                     .child(
                         Button::new(("message-actions", id))
@@ -667,7 +917,7 @@ impl Conversation {
                             .group_hover(group, |s| s.opacity(1.))
                             .focus_visible(|s| s.opacity(1.))
                             .dropdown_menu(move |menu, _, cx| {
-                                Self::message_menu(menu, &menu_owner, cx)
+                                Self::message_menu(menu, id, &menu_owner, cx)
                             })
                             .on_open_change(move |open, _, cx| {
                                 let _ = open_owner.update(cx, |v, cx| {
@@ -720,8 +970,12 @@ impl Conversation {
                 let target = embed["url"].as_str().map(str::to_owned);
                 let owner = owner.clone();
                 if embed["kind"] == "upload" {
+                    if let Some(url) = target.clone() {
+                        row = row.child(Self::embedded_image(id, ix, url, &owner, cx));
+                    }
                     row = row.child(
                         Button::new(SharedString::from(format!("save-{id}-{ix}")))
+                            .self_start()
                             .outline()
                             .small()
                             .label(format!("Save {title}…"))
@@ -737,15 +991,21 @@ impl Conversation {
                 }
             }
         }
-        row.context_menu(move |menu, _, cx| Self::message_menu(menu, &context_owner, cx))
+        row.context_menu(move |menu, _, cx| Self::message_menu(menu, id, &context_owner, cx))
             .into_any_element()
     }
-    fn message_menu(menu: PopupMenu, owner: &WeakEntity<Self>, cx: &App) -> PopupMenu {
+    fn message_menu(menu: PopupMenu, id: u64, owner: &WeakEntity<Self>, cx: &App) -> PopupMenu {
         let can_reply = owner
             .upgrade()
             .is_some_and(|v| v.read(cx).ready && v.read(cx).joined());
+        let can_edit = owner.upgrade().is_some_and(|v| v.read(cx).can_mutate(id));
         menu.menu_with_disabled("Reply", Box::new(ReplyMessage), !can_reply)
             .menu("Copy message", Box::new(CopyMessage))
+            .when(can_edit, |m| {
+                m.separator()
+                    .menu("Edit message…", Box::new(EditMessage))
+                    .menu("Delete message…", Box::new(DeleteMessage))
+            })
     }
     fn navigation(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut pane = div()
@@ -1003,6 +1263,8 @@ impl Conversation {
                             .menu_with_disabled("Load earlier", Box::new(LoadOlder), !can_load)
                             .separator()
                             .menu("Sign in with token…", Box::new(OpenSession))
+                            .menu("Next unread mention", Box::new(NextMention))
+                            .menu("Local data…", Box::new(OpenPrivacy))
                             .menu("Keyboard shortcuts…", Box::new(ShowHelp))
                     })
                     .on_open_change(cx.listener(|this, open, _, cx| {
@@ -1035,8 +1297,31 @@ impl Conversation {
             } else {
                 px(0.)
             };
-        let show_hint = content_width >= window.rem_size() * 26.;
+        let show_hint = content_width >= window.rem_size() * 45.;
+        let completing = !self.mention_candidates(cx).is_empty();
         let mut pane = div()
+            .key_context(if completing {
+                "ApronComposer MentionCompletion"
+            } else {
+                "ApronComposer"
+            })
+            .on_action(cx.listener(|v, _: &PasteImage, w, cx| v.paste_image(w, cx)))
+            .on_action(cx.listener(|v, _: &MentionNext, _, cx| {
+                v.mention_index = (v.mention_index + 1) % v.mention_candidates(cx).len().max(1);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|v, _: &MentionPrevious, _, cx| {
+                let n = v.mention_candidates(cx).len().max(1);
+                v.mention_index = (v.mention_index + n - 1) % n;
+                cx.notify();
+            }))
+            .on_action(cx.listener(|v, _: &MentionAccept, w, cx| {
+                let list = v.mention_candidates(cx);
+                if !list.is_empty() {
+                    let id = list[v.mention_index % list.len()].id.clone();
+                    v.add_mention(&id, w, cx);
+                }
+            }))
             .flex()
             .flex_col()
             .gap_2()
@@ -1070,35 +1355,7 @@ impl Conversation {
                     ),
             );
         }
-        if !self.files.is_empty() {
-            let count = self.files.len();
-            let bytes = self.files.iter().map(|f| f.bytes.len()).sum::<usize>();
-            pane = pane.child(
-                div()
-                    .flex()
-                    .gap_2()
-                    .text_sm()
-                    .child(format!(
-                        "{count} files · {bytes} bytes: {}",
-                        self.files
-                            .iter()
-                            .map(|f| f.title.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ))
-                    .child(
-                        Button::new("clear-files")
-                            .ghost()
-                            .small()
-                            .label("Remove")
-                            .disabled(self.pending)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.files.clear();
-                                cx.notify();
-                            })),
-                    ),
-            );
-        }
+        pane = pane.child(self.staged_images_view(cx));
         if self.transfer_busy {
             pane = pane.child(
                 Button::new("cancel-transfer")
@@ -1116,9 +1373,11 @@ impl Conversation {
                 .accessibility_id("composer")
                 .w_full(),
         );
+        pane = pane.child(self.mention_list(cx));
         pane.child(
             div()
                 .flex()
+                .flex_wrap()
                 .items_center()
                 .gap_2()
                 .child(
@@ -1134,6 +1393,26 @@ impl Conversation {
                                 || !self.caps.iter().any(|c| c == "embed:upload"),
                         )
                         .on_click(cx.listener(|this, _, window, cx| this.attach(window, cx))),
+                )
+                .child(
+                    Button::new("mention-person")
+                        .ghost()
+                        .small()
+                        .label("@ Mention")
+                        .on_click(cx.listener(|v, _, w, cx| {
+                            v.composer.update(cx, |s, cx| {
+                                s.replace("@", w, cx);
+                                s.focus(w, cx);
+                            });
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    Button::new("preview-markdown")
+                        .ghost()
+                        .small()
+                        .label("Preview…")
+                        .on_click(cx.listener(|v, _, w, cx| v.preview_markdown(w, cx))),
                 )
                 .child(
                     div()
@@ -1209,23 +1488,26 @@ impl Render for Conversation {
                     .child(model::clean(&self.transfer, 500)),
             );
         }
-        let scroller =
-            MessageScroller::new("transcript", self.scroller.clone(), move |ix, _, cx| {
+        let scroller = MessageScroller::new(
+            "transcript",
+            self.scroller.clone(),
+            move |ix, window, cx| {
                 if let Some(m) = rows.get(ix) {
                     if let Some(e) = owner.upgrade() {
                         e.read(cx)
                             .rendered_rows
                             .set(e.read(cx).rendered_rows.get() + 1);
                     }
-                    Self::row(m.clone(), owner.clone(), cx)
+                    Self::row(m.clone(), owner.clone(), window, cx)
                 } else {
                     div().into_any_element()
                 }
-            })
-            .with_list_style(StyleRefinement::default().px_6().py_3())
-            .with_row_style(StyleRefinement::default().pb_2())
-            .with_jump_button_renderer(|b| b.label("Latest").small())
-            .with_jump_button_transition(Duration::ZERO);
+            },
+        )
+        .with_list_style(StyleRefinement::default().px_6().py_3())
+        .with_row_style(StyleRefinement::default().pb_2())
+        .with_jump_button_renderer(|b| b.label("Latest").small())
+        .with_jump_button_transition(Duration::ZERO);
         let transcript = if self.rows.is_empty() {
             div()
                 .size_full()
@@ -1255,8 +1537,23 @@ impl Render for Conversation {
         } else {
             scroller.into_any_element()
         };
+        let transcript_bounds = self.transcript_bounds.clone();
         content = content
-            .child(div().flex_1().min_h_0().child(transcript))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .relative()
+                    .child(
+                        canvas(
+                            move |bounds, _, _| *transcript_bounds.borrow_mut() = bounds,
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_full(),
+                    )
+                    .child(transcript),
+            )
             .child(self.compose(window, cx));
         let shell = div()
             .key_context("Apron")
@@ -1272,6 +1569,13 @@ impl Render for Conversation {
                 this.filter.update(cx, |s, cx| s.focus(window, cx));
                 cx.notify();
             }))
+            .on_action(cx.listener(|v,_:&NextMention,_,cx|{
+                if let Some(id)=v.attention.first_mention(&v.room){
+                    if let Some(ix)=v.rows.iter().position(|m|m.id==id){v.scroller.update(cx,|s,cx|s.scroll_to_item(ix,cx));}
+                    else {v.error="This unread mention is outside retained history. Load earlier messages to inspect it.".into();cx.notify();}
+                }
+            }))
+            .on_action(cx.listener(|this, _: &OpenPrivacy, w, cx| this.privacy_dialog(w, cx)))
             .on_action(cx.listener(|this, _: &MarkRead, _, cx| this.mark_read(cx)))
             .on_action(
                 cx.listener(|this, _: &OpenSession, window, cx| this.session_dialog(window, cx)),

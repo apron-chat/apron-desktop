@@ -3,7 +3,8 @@
 A separate, local Rust/GPUI Kit experiment alongside the GTK client. This is a
 working protocol client, with a virtualized variable-height transcript, selectable
 Markdown, contextual reply/copy actions, session token sign-in, unread/mention
-badges, room filtering, and bounded explicit file transfers. It is **not yet a replacement
+badges, room filtering, contextual editing/deletion, opt-in private drafts,
+member-backed mention completion, and bounded explicit image/file transfers. It is **not yet a replacement
 for the GTK client**. See [COMPARISON.md](COMPARISON.md) for measured results and gaps.
 
 ![Native Wayland preview using fictional messages](docs/preview.png)
@@ -29,7 +30,7 @@ have not been verified in this workspace.
 The flake pins nixpkgs and evaluates on x86_64-linux and aarch64-linux. It is a
 **development shell**, not a fully built Nix package. Cargo.lock and
 rust-toolchain.toml pin dependencies and Rust 1.99.0; rustup downloads that
-compiler on first use. The shell includes Python with websockets for the synthetic fixture. GPUI Kit 0.7.1 depends on gpui-pre 0.3.8. Rust 1.94 was
+compiler on first use. The shell includes Python with websockets for the synthetic fixture and wl-clipboard for native clipboard verification. GPUI Kit 0.7.1 depends on gpui-pre 0.3.8. Rust 1.94 was
 insufficient for this dependency snapshot (`std::hint::cold_path`). No patches or
 RUSTC_BOOTSTRAP are used. A clean Nix build and aarch64 compilation remain unrun.
 
@@ -87,29 +88,72 @@ The address is supplied at launch, not through an in-app settings dialog.
   preserves unread state. Ctrl+Shift+U marks the room read; the unread header action
   jumps to the first retained unread message. Read activity is best-effort and only
   sent when supported. Own activity broadcasts advance local cursors.
-  Counts cover received session events: there is no startup/backfill unread count
-  or offline notification recovery. Bounds can discard the oldest pending entries.
+  Saved cursors reconcile fetched history on reconnect/room entry. A fresh profile
+  starts at its first fetched page. Counts cover received/fetched evidence, not all
+  unfetched offline rooms; bounds can discard the oldest pending entries.
 - Selectable rendered Markdown, Ctrl+C selection and explicit whole-message Copy.
-  Raw HTML/images are removed and links are inert; no automatic media requests.
+  Headings, emphasis, lists, quotes and code render natively. Raw HTML and Markdown
+  images are removed and links are inert; no automatic media requests. Outgoing
+  text uses Markdown; Preview shows the sanitized result before sending.
+- Type @ and select a supplied room member using arrows/Enter or a click. The
+  Notifies chips show explicit protocol recipients; typing a display name alone
+  never guesses a recipient. Completion supports up to 512 supplied members, six
+  matches, 32 selected recipients, and whitespace-free IDs up to 128 bytes.
+  Incoming protocol mentions have a textual @ You label and a next-unread-mention action.
+- Own messages expose Edit/Delete when the server advertises edit. Edits retain
+  body metadata, embeds and the reply reference. Delete requires a dialog action.
+  Stale cached targets are rejected; server permission errors preserve the editor.
+  Uncertain changes are never retried automatically.
 - One to four chosen regular files, at most 8 MiB total; explicit same-origin
   upload/download, no redirects or auth forwarding. Downloads use a private
   temporary file and refuse to overwrite an existing destination. A local commit
   already begun can finish after cancellation. Transfers run independently of
-  WebSocket heartbeats. Attachment thumbnails, drag/drop and clipboard paste are deferred.
+  WebSocket heartbeats. Ctrl+V/Shift+Insert accepts native PNG/JPEG/WebP/GIF/BMP
+  images, normalizes them to PNG in a worker, and shows removable previews. Paste
+  never sends. Embedded upload images require an explicit same-server Load action.
+  Raster limits: 4096 pixels per side, eight million pixels, 64 MiB decoder budget;
+  eight cached thumbnails, each at most 640×480. SVG is rejected; animation uses
+  its first frame. Metadata is removed during normalization. Drag/drop is deferred.
 - Bounded event channels, protocol heartbeat, exponential reconnect, explicit errors.
   Uncertain sends are not automatically retried. Reconnect uses the latest returned
   session token, including guest tokens, preserving identity where supported.
   Authentication rejection waits for explicit action; a network loss during auth
   reconnects with a generic error that cannot echo token input.
 
-**Deferred:** email/OAuth/account creation, persistent state, durable unread recovery,
-notifications, room creation/moderation, edit/delete UI, presence/typing, settings,
-remote message search, rich compose, active external links, attachment previews, durable drafts,
+**Deferred:** email/OAuth/account creation, keyring token storage, complete offline unread recovery,
+notifications, room creation/moderation, reactions, presence/typing, settings,
+remote message search, WYSIWYG compose, active external links, drag/drop,
 full apron-web feature parity. GTK retains the broader product implementation.
 Room lists and draft count are capped at 256; room-list pagination is not implemented.
 
 The transport owns its own Tokio runtime; GPUI awaits events without busy polling.
 CPU timers in `--smoke` and `--benchmark` exist only in opt-in test modes.
+
+## Local data and privacy
+
+Conversation menu → **Local data** enables draft/read-cursor persistence for the
+current server/user. It is off by default. It stores draft text, reply IDs, selected
+mention IDs and read cursors; never tokens, message history or attachments. Files
+are unencrypted, private (0600, directory 0700), atomic, and keyed by a hash of the
+server/user. Location: `$XDG_STATE_HOME/apron-gpui` (default `~/.local/state/apron-gpui`).
+Limits: 256 rooms, 32,000 bytes per draft, 256 KiB draft text, 512 KiB per profile,
+16 profiles. Errors are visible; drafts over limits are not silently truncated.
+Disable erases the saved copy while retaining current drafts; Reset also clears
+this session's drafts and selected files. Debounced writes and reset share an
+ordered worker. Normal exit flushes; an abrupt kill can lose the latest changes.
+Concurrent app instances for the same profile are not coordinated (last writer
+wins). Guest identity survives reconnect in memory; after a full restart, sign in
+as the same user to recover that profile. No plaintext bearer token is persisted.
+
+GPUI's upstream Wayland clipboard reader buffers an offered clipboard payload
+before returning it to the application. The app enforces its byte/pixel limits
+after that read; this is **not a pre-read memory bound** against a malicious local
+clipboard owner. HTTP transfers and raster decoding have separate explicit bounds.
+Image upload creates the message before transferring bytes. On failure/cancel,
+inspect the posted message before retrying; the app does not automatically repost.
+Clipboard previews are session-only and clear when switching rooms.
+
+See [DAILY_USE.md](DAILY_USE.md) for the latest implementation/test matrix and visual review.
 
 ## Verification
 
@@ -121,6 +165,8 @@ cargo test --locked --no-default-features --test loopback -- --ignored --nocaptu
 # Inside an isolated native Wayland test session:
 ./target/release/apron-gpui --smoke /tmp/gpui-smoke.json
 ./target/release/apron-gpui --polish-smoke /tmp/gpui-polish.json
+XDG_STATE_HOME=/tmp/apron-native-test-state ./target/release/apron-gpui \
+  --server ws://127.0.0.1:18766/ws --daily-smoke /tmp/gpui-daily.json
 ./target/release/apron-gpui --server ws://127.0.0.1:18766/ws \
   --benchmark SYNTHETIC_ROOM_ID /tmp/gpui-benchmark.json
 ```

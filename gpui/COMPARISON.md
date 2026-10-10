@@ -170,3 +170,11 @@ below the timer's resolution over that interval, not proof of zero energy use.
 Page timings end at state update, not GPU presentation. The difference from prior
 runs is not a statistical regression conclusion. Actual hardware-GPU/niri frame
 presentation, IME and assistive software remain untested.
+
+## Daily-use feature pass
+
+The later pass adds contextual edit/delete, explicit mention composition, private
+opt-in draft/read state and bounded clipboard/embedded-image handling. See
+[DAILY_USE.md](DAILY_USE.md) for measured evidence and remaining limits. Its warm
+CPU-Vulkan run measured 147.2 MiB RSS and no CPU ticks or row renders in the settled
+10-second interval. These are not hardware-GPU or controlled comparative results.

@@ -1,0 +1,282 @@
+use super::*;
+use apron_gpui::local_state::{Operation, Profile, Snapshot};
+impl Conversation {
+    pub(crate) fn local_snapshot(&self, cx: &App) -> Snapshot {
+        let mut drafts = self.drafts.clone();
+        if !self.room.is_empty() {
+            drafts.insert(
+                self.room.clone(),
+                (self.composer.read(cx).value().to_string(), self.reply),
+            );
+        }
+        drafts.retain(|_, (text, reply)| !text.is_empty() || reply.is_some());
+        Snapshot {
+            version: 1,
+            mentions: self
+                .draft_mentions
+                .iter()
+                .filter_map(|(room, ids)| {
+                    drafts.get(room).map(|(text, _)| {
+                        (room.clone(), apron_gpui::mentions::recipients(text, ids))
+                    })
+                })
+                .collect(),
+            drafts,
+            reads: self.attention.cursors(),
+        }
+    }
+    pub(crate) fn schedule_local(&mut self, cx: &mut Context<Self>) {
+        if !self.local_enabled || self.local_loading {
+            return;
+        }
+        self.local_status = "Saving locally…".into();
+        self.local_save = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(600))
+                .await;
+            let _ = this.update(cx, |this, cx| this.flush_local(cx));
+        }));
+    }
+    pub(crate) fn flush_local(&mut self, cx: &mut Context<Self>) {
+        if !self.local_enabled {
+            return;
+        }
+        let Some(profile) = self.profile.clone() else {
+            return;
+        };
+        let state = self.local_snapshot(cx);
+        match self.local_worker.submit(Operation::Save(profile, state)) {
+            Ok(rx) => {
+                let epoch = self.local_epoch;
+                cx.spawn(async move |this, cx| {
+                    let result = rx.recv().await;
+                    let _ = this.update(cx, |this, cx| {
+                        if this.local_epoch != epoch {
+                            return;
+                        }
+                        match result {
+                            Ok(Ok(_)) => {
+                                this.local_status = "Saved locally".into();
+                                this.local_error.clear();
+                            }
+                            Ok(Err(e)) => {
+                                this.local_error = e;
+                                this.local_status = "Not saved".into();
+                            }
+                            Err(_) => this.local_error = "Local storage stopped".into(),
+                        };
+                        cx.notify();
+                    });
+                })
+                .detach();
+            }
+            Err(e) => {
+                self.local_error = e.to_string();
+                cx.notify();
+            }
+        }
+    }
+    pub(crate) fn load_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let profile = Profile::new(&self.server, &self.you);
+        if self.profile.as_ref() == Some(&profile) {
+            return;
+        }
+        self.profile = Some(profile.clone());
+        self.local_epoch += 1;
+        self.local_loading = true;
+        self.local_enabled = false;
+        self.local_error.clear();
+        let epoch = self.local_epoch;
+        let result = self.local_worker.submit(Operation::Load(profile));
+        let Ok(rx) = result else {
+            self.local_loading = false;
+            self.local_error = "Could not read local storage".into();
+            return;
+        };
+        cx.spawn_in(window, async move |this, cx| {
+            let result = rx.recv().await;
+            let _ = this.update_in(cx, |this, w, cx| {
+                if epoch != this.local_epoch {
+                    return;
+                }
+                if let Ok(Ok(Some(state))) = &result {
+                    this.local_enabled = true;
+                    this.attention.restore(&state.reads);
+                    for (room, draft) in &state.drafts {
+                        if !this.local_touched.contains(room) {
+                            this.drafts.insert(room.clone(), draft.clone());
+                            this.draft_mentions.insert(
+                                room.clone(),
+                                state
+                                    .mentions
+                                    .get(room)
+                                    .cloned()
+                                    .unwrap_or_default()
+                                    .into_iter()
+                                    .collect(),
+                            );
+                        }
+                    }
+                    // Never replace text the user typed while the disk read was outstanding.
+                    if this.composer.read(cx).value().is_empty()
+                        && !this.local_touched.contains(&this.room)
+                        && let Some((text, reply)) = this.drafts.get(&this.room).cloned()
+                    {
+                        this.reply = reply;
+                        this.composer.update(cx, |s, cx| s.set_value(text, w, cx));
+                    }
+                    this.local_status = "Saved locally".into();
+                } else if let Ok(Err(e)) = result {
+                    this.local_error = e;
+                }
+                this.local_loading = false;
+                this.reconcile_attention(w, cx, true);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+    pub(crate) fn reconcile_attention(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        anchor: bool,
+    ) {
+        if self.local_loading || self.loading || self.room.is_empty() {
+            return;
+        }
+        self.attention.history(&self.room, &self.rows, &self.you);
+        if anchor
+            && let Some(first) = self.attention.first_unread(&self.room)
+            && let Some(ix) = self.rows.iter().position(|m| m.id >= first)
+        {
+            self.scroller.update(cx, |s, cx| s.scroll_to_item(ix, cx));
+        }
+        self.read_visible(window, cx);
+    }
+    pub(crate) fn enable_local(&mut self, cx: &mut Context<Self>) {
+        if self.profile.is_none() || self.local_loading {
+            return;
+        }
+        self.local_enabled = true;
+        self.local_error.clear();
+        self.flush_local(cx);
+        cx.notify();
+    }
+    pub(crate) fn forget_local(
+        &mut self,
+        clear: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(profile) = self.profile.clone() else {
+            return;
+        };
+        self.local_enabled = false;
+        self.local_save = None;
+        self.local_epoch += 1;
+        let epoch = self.local_epoch;
+        self.local_status = "Erasing saved data…".into();
+        self.local_error.clear();
+        if clear {
+            self.drafts.clear();
+            self.draft_mentions.clear();
+            self.local_touched.clear();
+            self.attention = Attention::default();
+            self.reply = None;
+            self.files.clear();
+            self.staged_images.clear();
+            self.clipboard_serial += 1;
+            self.clipboard_task = None;
+            self.composer
+                .update(cx, |s, cx| s.set_value("", window, cx));
+        }
+        match self.local_worker.submit(Operation::Forget(profile)) {
+            Ok(rx) => {
+                cx.spawn(async move |this, cx| {
+                    let result = rx.recv().await;
+                    let _ = this.update(cx, |this, cx| {
+                        if epoch != this.local_epoch {
+                            return;
+                        }
+                        match result {
+                            Ok(Ok(_)) => {
+                                this.local_status = "Local storage off; saved copy erased".into()
+                            }
+                            Ok(Err(e)) => this.local_error = e,
+                            Err(_) => this.local_error = "Could not erase local data".into(),
+                        };
+                        cx.notify();
+                    });
+                })
+                .detach();
+            }
+            Err(e) => self.local_error = e.to_string(),
+        }
+        cx.notify();
+    }
+    pub(crate) fn privacy_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if window.has_active_dialog(cx) {
+            return;
+        }
+        if self
+            .privacy_form
+            .as_ref()
+            .and_then(|f| f.upgrade())
+            .is_some()
+        {
+            return;
+        }
+        let owner = cx.entity();
+        let form = cx.new(|cx| PrivacyForm::new(owner, cx));
+        self.privacy_form = Some(form.downgrade());
+        window.open_dialog(cx, move |d, _, _| d.title("Local data").child(form.clone()));
+    }
+}
+pub struct PrivacyForm {
+    owner: WeakEntity<Conversation>,
+    confirm: bool,
+    _watch: Subscription,
+}
+impl PrivacyForm {
+    fn new(owner: Entity<Conversation>, cx: &mut Context<Self>) -> Self {
+        let watch = cx.observe(&owner, |_, _, cx| cx.notify());
+        Self {
+            owner: owner.downgrade(),
+            confirm: false,
+            _watch: watch,
+        }
+    }
+}
+impl Render for PrivacyForm {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(owner) = self.owner.upgrade() else {
+            return div().into_any_element();
+        };
+        let v = owner.read(cx);
+        let enabled = v.local_enabled;
+        let unavailable = v.profile.is_none() || v.local_loading;
+        let busy = v.pending || v.transfer_busy || v.mutation_pending.is_some();
+        let status = if !v.local_error.is_empty() {
+            v.local_error.clone()
+        } else if v.local_status.is_empty() {
+            "Off by default".into()
+        } else {
+            v.local_status.clone()
+        };
+        let toggle = owner.clone();
+        let reset = owner.clone();
+        div().flex().flex_col().gap_4()
+   .child(div().text_sm().child("Save drafts and read cursors for this server and user on this device. Tokens, message history and attachments are never saved."))
+   .child(div().text_sm().text_color(cx.theme().muted_foreground).child("Draft text is stored unencrypted in a private file under XDG_STATE_HOME/apron-gpui. Up to 256 rooms, 256 KiB of drafts, 512 KiB per profile and 16 profiles. Sign in again as the same user to restore it."))
+   .child(div().text_sm().child(status))
+   .when(!self.confirm,|d|d.child(div().flex().flex_wrap().gap_2()
+    .child(Button::new("local-toggle").label(if enabled{"Disable and erase saved copy"}else{"Enable local storage"}).disabled(unavailable).on_click(move|_,w,cx|toggle.update(cx,|v,cx|if enabled{v.forget_local(false,w,cx)}else{v.enable_local(cx)})))
+    .child(Button::new("local-reset").label("Reset this profile…").disabled(unavailable||busy).on_click(cx.listener(|this,_,_,cx|{this.confirm=true;cx.notify();})))) )
+   .when(self.confirm,|d|d.child(div().flex().flex_col().gap_2().child("Erase saved drafts and read cursors, clear this session’s drafts and selected files, and turn storage off? Messages on the server and your sign-in are unchanged.")
+    .child(div().flex().gap_2().child(Button::new("cancel-reset").label("Cancel").on_click(cx.listener(|this,_,_,cx|{this.confirm=false;cx.notify();})))
+    .child(Button::new("confirm-reset").label("Erase local data").on_click(cx.listener(move|this,_,w,cx|{reset.update(cx,|v,cx|v.forget_local(true,w,cx));this.confirm=false;cx.notify();}))))))
+   .child(div().flex().justify_end().child(Button::new("close-local").label("Done").on_click(|_,w,cx|w.close_dialog(cx))))
+   .into_any_element()
+    }
+}

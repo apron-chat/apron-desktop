@@ -116,6 +116,7 @@ async fn actor_reports_interruption_without_resending() {
             generation: 12,
             room: "general".into(),
             text: "/test-disconnect".into(),
+            mentions: vec![],
             reply: None,
             files: vec![],
         })
@@ -220,4 +221,99 @@ async fn joining_uses_membership_rpc_and_preserves_room_fields() {
         .unwrap();
     assert_eq!(record["title"], "Synthetic join preserves title");
     assert_eq!(record["description"], "Unchanged by a join");
+}
+
+#[tokio::test]
+#[ignore = "requires the dedicated official loopback Apron server"]
+async fn official_edit_delete_preserves_metadata_and_enforces_author() {
+    let mut c = Client::connect(OFFICIAL, None).await.unwrap();
+    c.guest().await.unwrap();
+    let room = c
+        .rpc(
+            "room_set",
+            json!({"title":"Synthetic edit and image checks"}),
+        )
+        .await
+        .unwrap();
+    let rid = text(&room["room_id"]);
+    let first = c
+        .rpc("message", json!({"room_id":rid,"body":{"text":"Parent"}}))
+        .await
+        .unwrap();
+    let posted=c.rpc("message",json!({"room_id":rid,"reply_to":{"message_id":first["message_id"]},"body":{"format":"markdown","text":"**Before**","mentions":[],"embeds":[{"kind":"upload","title":"test.png"}]}})).await.unwrap();
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::new_rgb8(32, 20)
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .unwrap();
+    media::put(
+        text(&posted["embeds"][0]["write_url"]),
+        OFFICIAL,
+        bytes.into_inner(),
+    )
+    .await
+    .unwrap();
+    let page = c.history(rid, None).await.unwrap();
+    let original = page["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|m| m["message_id"] == posted["message_id"])
+        .unwrap()
+        .clone();
+    let mut other = Client::connect(OFFICIAL, None).await.unwrap();
+    other.guest().await.unwrap();
+    other
+        .rpc("room_join", json!({"room_id":rid}))
+        .await
+        .unwrap();
+    assert!(
+        other
+            .rpc(
+                "message",
+                apron_gpui::edit::payload(&original, Some("Unauthorized")).unwrap()
+            )
+            .await
+            .is_err()
+    );
+    c.rpc(
+        "message",
+        apron_gpui::edit::payload(&original, Some("**After**")).unwrap(),
+    )
+    .await
+    .unwrap();
+    let page = c.history(rid, None).await.unwrap();
+    let edited = page["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|m| m["message_id"] == posted["message_id"])
+        .unwrap();
+    assert_eq!(edited["body"]["text"], "**After**");
+    assert_eq!(
+        edited["body"]["embeds"][0]["embed_id"],
+        original["body"]["embeds"][0]["embed_id"]
+    );
+    assert_eq!(
+        edited["body"]["embeds"][0]["title"],
+        original["body"]["embeds"][0]["title"]
+    );
+    assert_eq!(edited["reply_to"]["message_id"], first["message_id"]);
+    let raw = media::get(text(&edited["body"]["embeds"][0]["url"]), OFFICIAL)
+        .await
+        .unwrap();
+    let raster = apron_gpui::images::normalize(&raw).unwrap();
+    assert_eq!((raster.width, raster.height), (32, 20));
+    c.rpc("message", apron_gpui::edit::payload(edited, None).unwrap())
+        .await
+        .unwrap();
+    let page = c.history(rid, None).await.unwrap();
+    assert!(
+        page["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["message_id"] == posted["message_id"] && m["deleted"] == true)
+    );
 }

@@ -5,6 +5,7 @@ const PENDING: usize = 2000;
 #[derive(Default)]
 struct Room {
     read: u64,
+    baseline: bool,
     seen: u64,
     pending: BTreeMap<u64, bool>,
 }
@@ -68,16 +69,77 @@ impl Attention {
         }
         let r = self.rooms.entry(room.into()).or_default();
         let changed = through > r.read || r.pending.range(..=through).next().is_some();
+        r.baseline = true;
         r.read = r.read.max(through);
         r.seen = r.seen.max(through);
         r.pending.retain(|id, _| *id > through);
         changed
+    }
+    pub fn cursors(&self) -> BTreeMap<String, u64> {
+        self.rooms
+            .iter()
+            .filter(|(_, r)| r.baseline)
+            .map(|(id, r)| (id.clone(), r.read))
+            .collect()
+    }
+    pub fn restore(&mut self, cursors: &BTreeMap<String, u64>) {
+        for (room, id) in cursors.iter().take(ROOMS) {
+            self.mark_read(room, *id);
+        }
+    }
+    /// Reconcile fetched snapshots against a known read cursor, never count a fresh
+    /// installation's entire history as unread. Counters cover retained/fetched evidence.
+    pub fn history(
+        &mut self,
+        room: &str,
+        messages: &[std::sync::Arc<crate::model::Message>],
+        you: &str,
+    ) {
+        if room.len() > 256 || (!self.rooms.contains_key(room) && self.rooms.len() >= ROOMS) {
+            return;
+        }
+        let state = self.rooms.entry(room.into()).or_default();
+        if !state.baseline {
+            let latest = messages.iter().map(|m| m.id).max().unwrap_or(0);
+            state.read = state
+                .pending
+                .first_key_value()
+                .map(|(id, _)| id.saturating_sub(1).min(latest))
+                .unwrap_or(latest);
+            state.baseline = true;
+        }
+        let read = state.read;
+        for m in messages {
+            let own = m.raw["from"]["user_id"] == you;
+            if m.deleted() || own {
+                self.remove(room, m.id);
+                continue;
+            }
+            let mentioned = m.raw["body"]["mentions"]
+                .as_array()
+                .is_some_and(|v| v.iter().any(|u| u == you));
+            // This is a snapshot of an unread message, including older fetched pages.
+            if m.id <= read {
+                if !mentioned {
+                    self.remove(room, m.id);
+                }
+                continue;
+            }
+            self.receive(room, m.id, false, mentioned, true);
+        }
     }
     pub fn counts(&self, room: &str) -> (usize, usize) {
         self.rooms
             .get(room)
             .map(|r| (r.pending.len(), r.pending.values().filter(|v| **v).count()))
             .unwrap_or_default()
+    }
+    pub fn first_mention(&self, room: &str) -> Option<u64> {
+        self.rooms
+            .get(room)?
+            .pending
+            .iter()
+            .find_map(|(id, mention)| mention.then_some(*id))
     }
     pub fn first_unread(&self, room: &str) -> Option<u64> {
         self.rooms
@@ -108,6 +170,26 @@ mod tests {
         a.receive("r", 12, false, true, false);
         a.remove("r", 12);
         assert_eq!(a.counts("r"), (0, 0));
+    }
+    #[test]
+    fn restored_cursor_reconciles_offline_messages_without_repeating_read_mentions() {
+        use crate::model::Store;
+        let mut store = Store::default();
+        for id in 1..=4 {
+            store.apply(serde_json::json!({"message_id":id.to_string(),"log_id":id.to_string(),"room_id":"r","from":{"user_id":"other"},"body":{"text":"synthetic","mentions":["you"]}}));
+        }
+        let mut fresh = Attention::default();
+        fresh.history("r", &store.rows("r"), "you");
+        assert_eq!(fresh.counts("r"), (0, 0));
+        let mut restored = Attention::default();
+        restored.restore(&BTreeMap::from([("r".into(), 2)]));
+        restored.history("r", &store.rows("r"), "you");
+        assert_eq!(restored.counts("r"), (2, 2));
+        restored.history("r", &store.rows("r"), "you");
+        assert_eq!(restored.counts("r"), (2, 2));
+        restored.mark_read("r", 4);
+        restored.history("r", &store.rows("r"), "you");
+        assert_eq!(restored.counts("r"), (0, 0));
     }
     #[test]
     fn memory_is_bounded() {

@@ -1,4 +1,7 @@
-# GPUI design cleanup
+# GPUI design review
+
+See [DAILY_USE.md](DAILY_USE.md) for the subsequent persistence, Markdown, mention,
+image and contextual editing pass, including new native evidence and limitations.
 
 The primary task is reading and responding to a conversation. The previous view
 repeated Reply and Copy controls on every message and put reconnect beside normal
@@ -85,13 +88,14 @@ unloaded reply/unread targets before adding decorative UI.
 The review covers default and larger text plus light/dark themes in the headless
 compositor. It is not a claim about all locales, fractional scaling, physical
 keyboard/IME, assistive software, file chooser portals, hardware GPU performance or
-actual niri behavior. Selection across unrendered rows also remains unverified. A partially visible top
-row can receive a partly clipped focus ring; full keyboard-driven scroll-into-view
-for that row remains a follow-up. Its menu and reply action are operable. At the 640×480 minimum, low-frequency
+actual niri behavior. Selection across unrendered rows also remains unverified. The daily-use pass fixes the clipped keyboard-focus case: after the current
+virtual-list frame completes, a keyboard-focused clipped header scrolls into view.
+A deliberate 32-pixel clipping test checks the final geometry and captures the
+before/after state. Mouse focus does not trigger this correction. At the 640×480 minimum, low-frequency
 history controls move into the menu and the composer omits its hint when space is
 tight, retaining the complete Send button.
 Tokens are not persisted, but ordinary UI/network memory is not fully hardened
-against process-memory inspection. Unread state is session-local and bounded.
+against process-memory inspection. Unread state is bounded; the subsequent pass adds opt-in cursor persistence.
 
 ## Preview and result index
 

@@ -19,6 +19,10 @@ use tokio_tungstenite::{
 };
 #[derive(Debug)]
 pub enum Command {
+    Mutate {
+        operation: u64,
+        payload: Value,
+    },
     History {
         generation: u64,
         room: String,
@@ -28,12 +32,18 @@ pub enum Command {
         generation: u64,
         room: String,
         text: String,
+        mentions: Vec<String>,
         reply: Option<u64>,
         files: Vec<Attachment>,
     },
     ReadFiles {
         generation: u64,
         paths: Vec<PathBuf>,
+    },
+    LoadImage {
+        generation: u64,
+        key: String,
+        url: String,
     },
     Download {
         generation: u64,
@@ -52,6 +62,15 @@ pub enum Command {
 }
 #[derive(Debug)]
 pub enum Event {
+    Image {
+        generation: u64,
+        key: String,
+        result: Result<crate::images::Raster, String>,
+    },
+    Mutated {
+        operation: u64,
+        result: Result<(), String>,
+    },
     State(String),
     Ready {
         you: String,
@@ -358,6 +377,10 @@ async fn run(
         }
         // Queued writes are never replayed across connections.
         while let Ok(c) = commands.try_recv() {
+            if let Command::Mutate { operation, .. } = c {
+                emit(&events,Event::Mutated{operation,result:Err("Connection changed; change was not retried. Inspect the message before retrying.".into())}).await;
+                continue;
+            }
             if let Command::Send { generation, .. } | Command::History { generation, .. } = c {
                 emit(
                     &events,
@@ -370,6 +393,7 @@ async fn run(
             }
         }
         tokio::select! {_ = tokio::time::sleep(Duration::from_secs(delay))=>{},c=commands.recv()=>{if c.is_none(){return;}
+        if let Some(Command::Mutate{operation,..})=&c{emit(&events,Event::Mutated{operation:*operation,result:Err("Offline; change was not sent.".into())}).await;}
         if let Some(Command::Send{generation,..}|Command::History{generation,..})=c{emit(&events,Event::Failure{generation:Some(generation),message:"Offline; request was not sent.".into()}).await;}}}
         delay = (delay * 2).min(30);
     }
@@ -433,6 +457,26 @@ async fn handle_command(
     transfers: &mut tokio::task::JoinSet<()>,
 ) -> Result<bool> {
     match command {
+        Command::Mutate { operation, payload } => match c.rpc("message", payload).await {
+            Ok(_) => {
+                emit(
+                    events,
+                    Event::Mutated {
+                        operation,
+                        result: Ok(()),
+                    },
+                )
+                .await
+            }
+            Err(error) => {
+                let remote = error.downcast_ref::<RemoteError>().is_some();
+                emit(events,Event::Mutated{operation,result:Err(if remote {error.to_string()} else {"Connection interrupted; completion is uncertain. Inspect the message before trying again.".into()})}).await;
+                if !remote {
+                    return Err(error);
+                }
+            }
+        },
+
         Command::Read { room, through } => {
             if c.server["capabilities"]
                 .as_array()
@@ -457,7 +501,9 @@ async fn handle_command(
                 )
                 .await;
             } else {
-                let rooms = c.rpc("room_list", json!({"filter":"all"})).await?;
+                let rooms = c
+                    .rpc("room_list", json!({"filter":"all","members":true}))
+                    .await?;
                 emit(
                     events,
                     Event::Notice(json!({"method":"room_update","params":rooms})),
@@ -499,6 +545,7 @@ async fn handle_command(
             generation,
             room,
             text,
+            mentions,
             reply,
             files,
         } => {
@@ -513,7 +560,7 @@ async fn handle_command(
                 .await;
                 return Ok(true);
             }
-            let mut params = json!({"room_id":room,"body":{"text":text,"format":"plain"}});
+            let mut params = json!({"room_id":room,"body":{"text":text,"format":"markdown","mentions":mentions}});
             if let Some(id) = reply {
                 params["reply_to"] = json!({"message_id":id.to_string()});
             }
@@ -580,6 +627,58 @@ async fn handle_command(
                 .await
             }
         },
+        Command::LoadImage {
+            generation,
+            key,
+            url: target,
+        } => {
+            if !transfers.is_empty() {
+                emit(
+                    events,
+                    Event::Image {
+                        generation,
+                        key,
+                        result: Err("Finish or cancel the current transfer first".into()),
+                    },
+                )
+                .await;
+                return Ok(true);
+            }
+            let events = events.clone();
+            let server = url.to_owned();
+            transfers.spawn(async move {
+                emit(
+                    &events,
+                    Event::Transfer {
+                        message: "Loading image from this server…".into(),
+                        busy: true,
+                    },
+                )
+                .await;
+                let result = async {
+                    let bytes = media::get(&target, &server).await?;
+                    tokio::task::spawn_blocking(move || crate::images::normalize(&bytes)).await?
+                }
+                .await;
+                emit(
+                    &events,
+                    Event::Image {
+                        generation,
+                        key,
+                        result: result.map_err(|e: anyhow::Error| e.to_string()),
+                    },
+                )
+                .await;
+                emit(
+                    &events,
+                    Event::Transfer {
+                        message: "Image request finished".into(),
+                        busy: false,
+                    },
+                )
+                .await;
+            });
+        }
         Command::Download {
             generation: _,
             url: target,

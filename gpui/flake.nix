@@ -9,7 +9,7 @@
       libraries = with pkgs; [ fontconfig freetype wayland libxkbcommon vulkan-loader mesa openssl
         libx11 libx11.dev libxcursor libxrandr libxi libxcb ];
     in { default = pkgs.mkShell {
-      packages = with pkgs; [ rustup pkg-config clang cmake gnumake (python3.withPackages (ps: [ ps.websockets ])) weston vulkan-tools ];
+      packages = with pkgs; [ rustup pkg-config clang cmake gnumake (python3.withPackages (ps: [ ps.websockets ])) weston vulkan-tools wl-clipboard ];
       buildInputs = libraries;
       LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
       LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath libraries;

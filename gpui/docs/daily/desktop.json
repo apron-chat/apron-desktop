@@ -1,0 +1,15 @@
+{
+  "passed": true,
+  "checks": [
+    "Markdown native render",
+    "official server edit and delete",
+    "stale edit rejection and repeated Escape dialogs",
+    "native text clipboard paste",
+    "room identity completion and explicit mention IDs",
+    "native PNG and JPEG clipboard offers",
+    "preview without automatic send",
+    "two official uploads",
+    "explicit same-server bounded image loading",
+    "private opt-in save and ordered reset"
+  ]
+}

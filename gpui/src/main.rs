@@ -5,6 +5,7 @@ mod smoke;
 mod view;
 use gpui_kit::*;
 fn main() {
+    let mut daily = None;
     let mut bench = None;
     let mut smoke = None;
     let mut polish = None;
@@ -12,6 +13,7 @@ fn main() {
     let mut url = "ws://127.0.0.1:18765/ws".to_string();
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--daily-smoke" => daily = Some(args.next().expect("--daily-smoke OUTPUT")),
             "--server" => url = args.next().expect("--server URL"),
             "--benchmark" => {
                 let room = args.next().expect("--benchmark ROOM OUTPUT");
@@ -35,6 +37,9 @@ fn main() {
     if (smoke.is_some() || polish.is_some()) && url != "ws://127.0.0.1:18765/ws" {
         panic!("Smoke mode is restricted to the synthetic loopback fixture");
     }
+    if daily.is_some() && url != "ws://127.0.0.1:18766/ws" {
+        panic!("Daily mode requires the dedicated official loopback server");
+    }
     if bench.is_some() && url != "ws://127.0.0.1:18766/ws" {
         panic!("Benchmark mode is restricted to the dedicated official loopback server");
     }
@@ -47,6 +52,26 @@ fn main() {
         .run(move |cx| {
             gpui_kit::init(cx);
             cx.bind_keys([
+                KeyBinding::new("ctrl-v", view::PasteImage, Some("ApronComposer > Input")),
+                KeyBinding::new(
+                    "shift-insert",
+                    view::PasteImage,
+                    Some("ApronComposer > Input"),
+                ),
+                KeyBinding::new("down", view::MentionNext, Some("MentionCompletion > Input")),
+                KeyBinding::new(
+                    "up",
+                    view::MentionPrevious,
+                    Some("MentionCompletion > Input"),
+                ),
+                KeyBinding::new(
+                    "enter",
+                    view::MentionAccept,
+                    Some("MentionCompletion > Input"),
+                ),
+                KeyBinding::new("ctrl-enter", view::SaveEdit, Some("MessageEditor > Input")),
+                KeyBinding::new("e", view::EditMessage, Some("Message")),
+                KeyBinding::new("delete", view::DeleteMessage, Some("Message")),
                 KeyBinding::new("enter", session::SubmitSession, Some("Session > Input")),
                 KeyBinding::new("ctrl-enter", view::SendMessage, Some("Apron")),
                 // Override Textarea secondary-enter, which inserts a newline first.
@@ -81,6 +106,11 @@ fn main() {
                 cx.new(|cx| view::Conversation::new(url, window, cx))
             })
             .expect("Wayland/Vulkan window unavailable");
+            if let Some(output) = daily {
+                handle
+                    .update(cx, |_, w, cx| view::daily::start(&view, output, w, cx))
+                    .unwrap();
+            }
             if let Some((room, output)) = bench {
                 handle
                     .update(cx, |_, window, cx| {

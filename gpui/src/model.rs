@@ -266,10 +266,60 @@ pub fn update_rooms(
                         key == "joined"
                     };
                     let mut record = room.clone();
+                    // Members are an optional delivery projection, not room metadata.
+                    if let Some(old) = old {
+                        if record["members"].is_null() && old["members"].is_array() {
+                            record["members"] = old["members"].clone();
+                        }
+                        if old["_membership_logs"].is_object() {
+                            record["_membership_logs"] = old["_membership_logs"].clone();
+                        }
+                    }
                     record["_joined"] = serde_json::Value::Bool(joined);
                     rooms.insert(id.into(), record);
                 }
             }
+        }
+    }
+    if let Some(deltas) = list["memberships"].as_array() {
+        for delta in deltas.iter().take(256) {
+            let Some(room) = delta["room_id"].as_str().and_then(|id| rooms.get_mut(id)) else {
+                continue;
+            };
+            let log = number(&delta["log_id"]).unwrap_or(0);
+            let mut members: std::collections::BTreeMap<String, Value> = room["members"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .take(512)
+                .filter_map(|m| m["user_id"].as_str().map(|id| (id.to_owned(), m.clone())))
+                .collect();
+            for entry in delta["members"].as_array().into_iter().flatten().take(512) {
+                let Some(id) = entry["user"]["user_id"].as_str().filter(|s| s.len() <= 128) else {
+                    continue;
+                };
+                let prior = number(&room["_membership_logs"][id])
+                    .unwrap_or(number(&room["log_id"]).unwrap_or(0));
+                if log < prior {
+                    continue;
+                }
+                if room["_membership_logs"].is_null() {
+                    room["_membership_logs"] = serde_json::json!({});
+                }
+                if room["_membership_logs"]
+                    .as_object()
+                    .is_some_and(|m| m.len() >= 512 && !m.contains_key(id))
+                {
+                    continue;
+                }
+                room["_membership_logs"][id] = Value::from(log.to_string());
+                if entry["joined"] == true && (members.len() < 512 || members.contains_key(id)) {
+                    members.insert(id.to_owned(), entry["user"].clone());
+                } else if entry["joined"] == false {
+                    members.remove(id);
+                }
+            }
+            room["members"] = Value::Array(members.into_values().collect());
         }
     }
     if let Some(left) = list["left"].as_array() {
@@ -288,6 +338,26 @@ pub fn update_rooms(
 mod room_tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn membership_deltas_use_per_identity_clocks() {
+        let mut rooms = std::collections::BTreeMap::new();
+        update_rooms(
+            &mut rooms,
+            &json!({"joined":[{"room_id":"r","log_id":"10","members":[{"user_id":"a"}]}]}),
+        );
+        for (log, joined) in [(12, false), (11, true)] {
+            update_rooms(
+                &mut rooms,
+                &json!({"memberships":[{"room_id":"r","log_id":log.to_string(),"members":[{"user":{"user_id":"a"},"joined":joined}]}]}),
+            );
+        }
+        assert!(rooms["r"]["members"].as_array().unwrap().is_empty());
+        update_rooms(
+            &mut rooms,
+            &json!({"memberships":[{"room_id":"r","log_id":"11","members":[{"user":{"user_id":"b","name":"Bee"},"joined":true}]}]}),
+        );
+        assert_eq!(rooms["r"]["members"][0]["user_id"], "b");
+    }
     #[test]
     fn room_deltas_preserve_membership_and_reject_stale_rename() {
         let mut rooms = std::collections::BTreeMap::new();

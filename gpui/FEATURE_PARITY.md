@@ -14,22 +14,25 @@ a Tokio actor. No web view or browser is embedded.
 | Room creation, moderation, membership management | Deferred UI |
 | Latest/older history | Pages of 50, bounded cache, log reconciliation, stale-response rejection |
 | Sending and replies | Implemented; local room drafts; uncertain sends never auto-resend |
-| Message edit/delete, reactions | Incoming message revisions/deletes reconcile; outgoing UI deferred |
+| Message edit/delete | Own-message contextual UI, stale target checks, server permission errors; no uncertain retries |
+| Reactions | Deferred UI |
 | Selection and copy | Rendered-text selection and whole-message contextual copy |
-| Markdown and links | Sanitized HTML/images; links inert; no automatic remote fetching |
-| Unread and mentions | Session events only; bounded counters; server-provided mention IDs |
+| Markdown and links | Native headings/lists/code/emphasis/quotes, compose preview; sanitized HTML/images, inert links |
+| Unread and mentions | Bounded live/fetched-history reconciliation, optional saved cursors, ID-backed autocomplete and recipient chips |
 | Read receipts | Advance-only, best-effort supported activity; focused tail auto-read |
 | Typing, presence, notifications | Deferred UI |
 | Attachments | Explicit bounded upload/download; no redirects, same origin, no overwrite |
-| Thumbnails, drag/drop, clipboard file paste | Deferred |
+| Images | Native clipboard raster paste, removable preview, explicit same-server embedded-image load; bounded normalization/cache |
+| Drag/drop and clipboard files | Deferred |
 | Connection recovery | Heartbeat, bounded channels, backoff and explicit status/error states |
 | Keyboard | Send, room filter/toggle, history, mark read, menus, reply and copy |
 | Appearance | Toolkit semantic light/dark themes and relative sizing; settings UI deferred |
-| Persistence | No token, history or draft persistence |
+| Persistence | Opt-in private bounded draft/reply/recipient/read files; reset controls; tokens/history/attachments never saved |
 | NixOS/niri | Reproducible dev-shell inputs and launch instructions; actual niri/hardware unverified |
 | Accessibility/IME | Widget semantics and keyboard tests; assistive software/IME unverified |
 
-Unread is deliberately labelled session-local. Fetching older history does not
-invent unread counts, and reconnect does not infer missed notifications. A count is
-not a promise about every unread message on the server. Explicit history pagination
-and cache limits also mean not every unread target remains navigable locally.
+Unread counts describe received/fetched evidence, not every unfetched offline
+message. Reconnect/room entry reconciles retained history against saved read IDs.
+Offline edits that add mentions to older already-read messages are not recovered
+as new notifications. Targets evicted by history bounds require manual pagination.
+See README for limits, clipboard upstream constraints and profile concurrency.
