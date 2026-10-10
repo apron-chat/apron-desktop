@@ -1,4 +1,5 @@
 mod benchmark;
+mod design;
 mod polish;
 mod session;
 mod smoke;
@@ -51,7 +52,12 @@ fn main() {
         .with_assets(gpui_kit::assets::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
+            crate::design::apply(cx);
             cx.bind_keys([
+                KeyBinding::new("ctrl-f", view::FindMessages, Some("Apron")),
+                KeyBinding::new("ctrl-f", view::FindMessages, Some("Apron > Input")),
+                KeyBinding::new("f3", view::NextMatch, Some("Apron")),
+                KeyBinding::new("shift-f3", view::PreviousMatch, Some("Apron")),
                 KeyBinding::new("ctrl-v", view::PasteImage, Some("ApronComposer > Input")),
                 KeyBinding::new(
                     "shift-insert",

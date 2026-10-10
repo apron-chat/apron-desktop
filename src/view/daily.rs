@@ -51,6 +51,20 @@ async fn run(view: WeakEntity<Conversation>, output: String, cx: &mut AsyncWindo
         })
         .unwrap();
     stage(&output, "markdown", cx).await;
+    view.update_in(cx, |v, _, cx| v.react(id, "👍", cx))
+        .unwrap();
+    wait(&view, cx, |v, _| {
+        v.reacting.is_none() && v.reactions.own(id, &v.you).contains("👍")
+    })
+    .await;
+    stage(&output, "official-reaction", cx).await;
+    view.update_in(cx, |v, _, cx| v.react(id, "👍", cx))
+        .unwrap();
+    wait(&view, cx, |v, _| {
+        v.reacting.is_none() && v.reactions.own(id, &v.you).is_empty()
+    })
+    .await;
+
     view.update_in(cx, |v, w, cx| v.open_mutation(id, false, w, cx))
         .unwrap();
     stage(&output, "edit", cx).await;
@@ -290,6 +304,6 @@ async fn run(view: WeakEntity<Conversation>, output: String, cx: &mut AsyncWindo
     })
     .await;
     stage(&output, "final", cx).await;
-    std::fs::write(&output,serde_json::to_vec_pretty(&json!({"passed":true,"checks":["Markdown native render","official server edit and delete","stale edit rejection and repeated Escape dialogs","native text clipboard paste","room identity completion and explicit mention IDs","native PNG and JPEG clipboard offers","preview without automatic send","two official uploads","explicit same-server bounded image loading","private opt-in save and ordered reset"]})).unwrap()).unwrap();
+    std::fs::write(&output,serde_json::to_vec_pretty(&json!({"passed":true,"checks":["Markdown native render","official reaction add/remove through transport actor","official server edit and delete","stale edit rejection and repeated Escape dialogs","native text clipboard paste","room identity completion and explicit mention IDs","native PNG and JPEG clipboard offers","preview without automatic send","two official uploads","explicit same-server bounded image loading","private opt-in save and ordered reset"]})).unwrap()).unwrap();
     cx.update(|_, cx| cx.quit()).unwrap();
 }

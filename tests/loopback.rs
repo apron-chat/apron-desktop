@@ -317,3 +317,57 @@ async fn official_edit_delete_preserves_metadata_and_enforces_author() {
             .any(|m| m["message_id"] == posted["message_id"] && m["deleted"] == true)
     );
 }
+
+#[tokio::test]
+#[ignore = "requires official synthetic loopback server"]
+async fn official_reactions_replace_remove_and_reconcile_history() {
+    use apron_gpui::reactions::Reactions;
+    let mut c = Client::connect(OFFICIAL, None).await.unwrap();
+    let auth = c.guest().await.unwrap();
+    let user = text(&auth["you"]["user_id"]);
+    let room = c
+        .rpc(
+            "room_set",
+            json!({"title":"Synthetic reaction replacement"}),
+        )
+        .await
+        .unwrap();
+    let rid = text(&room["room_id"]);
+    let m = c
+        .rpc(
+            "message",
+            json!({"room_id":rid,"body":{"text":"React here"}}),
+        )
+        .await
+        .unwrap();
+    let mid = m["message_id"].clone();
+    c.rpc("reactions", json!({"message_id":mid,"emojis":["👍","❤️"]}))
+        .await
+        .unwrap();
+    let before = c.history(rid, None).await.unwrap();
+    let mut state = Reactions::default();
+    for r in before["reactions"].as_array().unwrap() {
+        state.apply(r);
+    }
+    assert_eq!(state.totals(number(&mid).unwrap()).len(), 2);
+    let boundary = number(&before["last_log_id"]).unwrap();
+    c.rpc("reactions", json!({"message_id":mid,"emojis":["❤️"]}))
+        .await
+        .unwrap();
+    let page = c.history(rid, Some(boundary)).await.unwrap();
+    for r in page["reactions"].as_array().unwrap() {
+        state.apply(r);
+    }
+    assert_eq!(
+        state.own(number(&mid).unwrap(), user),
+        ["❤️".to_string()].into_iter().collect()
+    );
+    c.rpc("reactions", json!({"message_id":mid,"emojis":[]}))
+        .await
+        .unwrap();
+    let page = c.history(rid, None).await.unwrap();
+    for r in page["reactions"].as_array().unwrap() {
+        state.apply(r);
+    }
+    assert!(state.totals(number(&mid).unwrap()).is_empty());
+}

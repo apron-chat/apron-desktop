@@ -19,6 +19,11 @@ use tokio_tungstenite::{
 };
 #[derive(Debug)]
 pub enum Command {
+    React {
+        generation: u64,
+        message: u64,
+        emojis: Vec<String>,
+    },
     Mutate {
         operation: u64,
         payload: Value,
@@ -69,6 +74,11 @@ pub enum Event {
     },
     Mutated {
         operation: u64,
+        result: Result<(), String>,
+    },
+    Reacted {
+        generation: u64,
+        message: u64,
         result: Result<(), String>,
     },
     State(String),
@@ -273,6 +283,10 @@ impl Client {
             page["messages"].as_array().is_some_and(|v| v.len() <= PAGE),
             "Invalid bounded history page"
         );
+        let mut reactions = crate::reactions::Reactions::default();
+        for r in page["reactions"].as_array().into_iter().flatten() {
+            reactions.apply(r);
+        }
         if before.is_some() {
             let horizon = number(&page["latest_log_id"]).context("Missing history horizon")?;
             let mut pos = number(&page["last_log_id"])
@@ -297,6 +311,9 @@ impl Client {
                         <= number(&page["first_log_id"]).unwrap_or(pos),
                     "History retention changed; reload latest"
                 );
+                for r in update["reactions"].as_array().into_iter().flatten() {
+                    reactions.apply(r);
+                }
                 if let Some(messages) = update["messages"].as_array() {
                     for m in messages {
                         if let Some(old) = projection.get_mut(text(&m["message_id"]))
@@ -315,6 +332,7 @@ impl Client {
             }
             page["messages"] = Value::Array(projection.into_values().collect());
         }
+        page["reactions"] = json!(reactions.records());
         Ok(page)
     }
 }
@@ -457,6 +475,45 @@ async fn handle_command(
     transfers: &mut tokio::task::JoinSet<()>,
 ) -> Result<bool> {
     match command {
+        Command::React {
+            generation,
+            message,
+            emojis,
+        } => {
+            let result = if c.server["capabilities"]
+                .as_array()
+                .is_some_and(|v| v.iter().any(|v| v == "reactions"))
+            {
+                c.rpc(
+                    "reactions",
+                    json!({"message_id":message.to_string(),"emojis":emojis}),
+                )
+                .await
+                .map(|_| ())
+            } else {
+                Err(RemoteError("This server does not support reactions.".into()).into())
+            };
+            match result {
+                Ok(()) => {
+                    emit(
+                        events,
+                        Event::Reacted {
+                            generation,
+                            message,
+                            result: Ok(()),
+                        },
+                    )
+                    .await
+                }
+                Err(error) => {
+                    let remote = error.downcast_ref::<RemoteError>().is_some();
+                    emit(events,Event::Reacted{generation,message,result:Err(if remote {error.to_string()} else {"Reaction completion is uncertain. Reconnect and inspect before retrying.".into()})}).await;
+                    if !remote {
+                        return Err(error);
+                    }
+                }
+            }
+        }
         Command::Mutate { operation, payload } => match c.rpc("message", payload).await {
             Ok(_) => {
                 emit(

@@ -63,6 +63,48 @@ async fn run(view: WeakEntity<Conversation>, output: String, cx: &mut AsyncWindo
     .await;
     settle(cx).await;
     stage(&output, "wide", cx).await;
+    view.update_in(cx, |v, w, cx| v.composer.update(cx, |s, cx| s.focus(w, cx)))
+        .unwrap();
+    cx.update(|w, cx| key("ctrl-f", w, cx)).unwrap();
+    view.update_in(cx, |v, w, cx| {
+        v.search
+            .update(cx, |s, cx| s.set_value("fixture note", w, cx))
+    })
+    .unwrap();
+    settle(cx).await;
+    let first = view
+        .update_in(cx, |v, _, cx| {
+            assert!(v.searching);
+            assert!(v.match_ids(cx).len() > 2);
+            v.match_ids(cx)[0]
+        })
+        .unwrap();
+    cx.update(|w, cx| key("f3", w, cx)).unwrap();
+    settle(cx).await;
+    view.update_in(cx, |v, _, cx| assert_ne!(v.match_ids(cx)[1], first))
+        .unwrap();
+    stage(&output, "search", cx).await;
+    cx.update(|w, cx| key("escape", w, cx)).unwrap();
+    settle(cx).await;
+    assert!(!view.update_in(cx, |v, _, _| v.searching).unwrap());
+    cx.update(|w, cx| key("f3", w, cx)).unwrap();
+    assert!(!view.update_in(cx, |v, _, _| v.searching).unwrap());
+    view.update_in(cx, |v, w, cx| {
+        v.select("design".into(), w, cx);
+        assert!(v.match_ids(cx).is_empty());
+    })
+    .unwrap();
+    wait(&view, cx, |v, _| !v.loading).await;
+    view.update_in(cx, |v, w, cx| v.select("general".into(), w, cx))
+        .unwrap();
+    wait(&view, cx, |v, _| !v.loading).await;
+
+    view.update_in(cx, |v, _, cx| {
+        v.scroller.update(cx, |s, cx| s.scroll_to_end(cx))
+    })
+    .unwrap();
+    settle(cx).await;
+
     let (id, bounds) = view
         .update_in(cx, |v, w, _| {
             v.geometry
@@ -114,6 +156,19 @@ async fn run(view: WeakEntity<Conversation>, output: String, cx: &mut AsyncWindo
             .unwrap(),
         Some(expected)
     );
+    // Exercise the native nested reaction menu, then toggle off via the same action.
+    let bounds = view
+        .update_in(cx, |v, _, _| *v.geometry.borrow().get(&id).unwrap())
+        .unwrap();
+    right_click(bounds.origin + point(px(30.), px(8.)), cx).await;
+    for k in ["down", "down", "down", "right", "enter"] {
+        cx.update(|w, cx| key(k, w, cx)).unwrap();
+    }
+    wait(&view, cx, |v, _| !v.reactions.totals(id).is_empty()).await;
+    stage(&output, "reactions", cx).await;
+    view.update_in(cx, |v, _, cx| v.react(id, "👍", cx))
+        .unwrap();
+    wait(&view, cx, |v, _| v.reactions.totals(id).is_empty()).await;
     // Deliberately clip the first row header before keyboard traversal.
     view.update_in(cx, |v, _, cx| {
         v.scroller.update(cx, |s, cx| {
@@ -329,7 +384,7 @@ async fn run(view: WeakEntity<Conversation>, output: String, cx: &mut AsyncWindo
         .unwrap();
     settle(cx).await;
     stage(&output, "large-text", cx).await;
-    let report = serde_json::json!({"native_wayland":true,"context_menu_reply_target":true,"context_menu_copy":true,"keyboard_menu_navigation":true,"toolbar_session_menu":true,"tab_reaches_message_actions":true,"keyboard_only_reply":true,"escape_cancels_reply":true,"ctrl_k_focuses_room_filter":true,"background_unread_mention":true,"history_reading_preserves_unread":true,"keyboard_mark_read":true,"escape_dismisses_masked_token_dialog":true,"rejected_token_error":true,"valid_token_session":true,"synthetic_data_only":true});
+    let report = serde_json::json!({"loaded_search_keyboard":true,"reaction_menu_add_remove":true,"native_wayland":true,"context_menu_reply_target":true,"context_menu_copy":true,"keyboard_menu_navigation":true,"toolbar_session_menu":true,"tab_reaches_message_actions":true,"keyboard_only_reply":true,"escape_cancels_reply":true,"ctrl_k_focuses_room_filter":true,"background_unread_mention":true,"history_reading_preserves_unread":true,"keyboard_mark_read":true,"escape_dismisses_masked_token_dialog":true,"rejected_token_error":true,"valid_token_session":true,"synthetic_data_only":true});
     std::fs::write(&output, serde_json::to_string_pretty(&report).unwrap()).unwrap();
     cx.update(|_, cx| cx.quit()).unwrap();
 }

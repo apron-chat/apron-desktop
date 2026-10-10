@@ -381,3 +381,14 @@ mod room_tests {
         assert_eq!(rooms["r"]["_joined"], false);
     }
 }
+
+/// Compact adjacent messages only when identity, room and a short time window agree.
+/// Replies retain their own author heading; never group across the UTC date boundary.
+pub fn grouped(previous: &Message, current: &Message) -> bool {
+    !text(&current.raw["from"]["user_id"]).is_empty()
+        && previous.raw["from"]["user_id"] == current.raw["from"]["user_id"]
+        && previous.room == current.room
+        && current.raw["reply_to"].is_null()
+        && current.id.saturating_sub(previous.id) < 300_000
+        && current.id / 86_400_000 == previous.id / 86_400_000
+}

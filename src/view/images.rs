@@ -85,7 +85,7 @@ impl Conversation {
     pub(crate) fn staged_images_view(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut d = div()
             .id("staged-attachments")
-            .max_h_32()
+            .max_h_40()
             .overflow_y_scroll()
             .flex()
             .flex_col()
@@ -105,12 +105,24 @@ impl Conversation {
         }
         for (ix, file) in self.files.iter().enumerate() {
             let name = file.title.clone();
-            let mut item = div().flex().items_center().gap_2();
+            let mut item = div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .py_1()
+                .h_9()
+                .flex_shrink_0()
+                .rounded_lg()
+                .bg(cx.theme().muted)
+                .border_1()
+                .border_color(cx.theme().border);
             if let Some(preview) = self.staged_images.get(&name) {
                 item = item.child(
                     img(preview.clone())
-                        .w_20()
-                        .h_16()
+                        .w_10()
+                        .h_6()
+                        .rounded_md()
                         .object_fit(ObjectFit::Contain),
                 );
             }
@@ -124,7 +136,9 @@ impl Conversation {
                     Button::new(("remove-file", ix))
                         .ghost()
                         .small()
-                        .label("Remove")
+                        .icon(IconName::Close)
+                        .accessibility_label(format!("Remove {name}"))
+                        .tooltip("Remove attachment")
                         .disabled(self.pending)
                         .on_click(cx.listener(move |v, _, _, cx| {
                             if let Some(pos) = v.files.iter().position(|f| f.title == name) {

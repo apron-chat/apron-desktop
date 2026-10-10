@@ -1,4 +1,5 @@
 pub(crate) mod daily;
+mod discover;
 mod edit;
 mod focus;
 mod images;
@@ -45,7 +46,15 @@ actions!(
         MentionPrevious,
         MentionAccept,
         PasteImage,
-        NextMention
+        NextMention,
+        FindMessages,
+        NextMatch,
+        PreviousMatch,
+        ToggleTheme,
+        ReactLike,
+        ReactHeart,
+        ReactCelebrate,
+        ReactLaugh
     ]
 );
 type FocusGeometry = Rc<std::cell::RefCell<Option<(u64, Bounds<Pixels>)>>>;
@@ -74,6 +83,14 @@ pub struct Conversation {
     pub(crate) authenticated: bool,
     pub(crate) attention: Attention,
     pub(crate) filter: Entity<InputState>,
+    pub(crate) search: Entity<InputState>,
+    pub(crate) searching: bool,
+    search_index: usize,
+    search_matches: Vec<u64>,
+    search_query: String,
+    unread_only: bool,
+    pub(crate) reactions: apron_gpui::reactions::Reactions,
+    reacting: Option<u64>,
     pub(crate) session_form: Option<WeakEntity<crate::session::SessionForm>>,
     rooms: BTreeMap<String, Value>,
     users: BTreeMap<String, Value>,
@@ -122,6 +139,28 @@ impl Conversation {
                 .auto_grow(2, 5)
         });
         let filter = cx.new(|cx| InputState::new(window, cx).placeholder("Find a room…"));
+        let search =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Search loaded messages…"));
+        let search_observer = cx.observe_in(&search, window, |v, _, _, cx| {
+            if v.search.read(cx).value().trim().to_lowercase() != v.search_query {
+                v.search_index = 0;
+                v.update_matches(cx);
+                v.reveal_match(cx);
+                cx.notify();
+            }
+        });
+        let search_watch = cx.subscribe_in(&search, window, |v, _, event, w, cx| {
+            if matches!(event, InputEvent::Change) {
+                v.search_index = 0;
+                v.update_matches(cx);
+                v.reveal_match(cx);
+                cx.notify();
+            }
+            if matches!(event, InputEvent::PressEnter { .. }) {
+                v.step_match(true, cx);
+                v.search.update(cx, |s, cx| s.focus(w, cx));
+            }
+        });
         let filter_subscription = cx.observe(&filter, |_, _, cx| cx.notify());
         let scroller = cx.new(|cx| MessageScrollerState::new(0, cx));
         let subscription = cx.subscribe_in(&composer, window, |this, _, event, window, cx| {
@@ -214,6 +253,14 @@ impl Conversation {
             server: url,
             authenticated: false,
             attention: Attention::default(),
+            search,
+            searching: false,
+            search_index: 0,
+            search_matches: Vec::new(),
+            search_query: String::new(),
+            unread_only: false,
+            reactions: Default::default(),
+            reacting: None,
             filter,
             session_form: None,
             rooms: BTreeMap::new(),
@@ -252,6 +299,8 @@ impl Conversation {
             inspect: false,
             _events: task,
             _subscriptions: vec![
+                search_observer,
+                search_watch,
                 subscription,
                 observation,
                 activation,
@@ -353,6 +402,10 @@ impl Conversation {
         self.image_errors.clear();
         self.clipboard_task = None;
         self.reply = None;
+        self.reactions = Default::default();
+        self.search_matches.clear();
+        self.searching = false;
+        self.search.update(cx, |s, cx| s.set_value("", window, cx));
         self.you.clear();
         self.composer
             .update(cx, |s, cx| s.set_value("", window, cx));
@@ -382,12 +435,13 @@ impl Conversation {
         window.open_dialog(cx,|dialog,_,_|dialog.title("Keyboard & message actions").child(div().flex().flex_col().gap_3()
             .child("Ctrl+Enter — send · Enter — new line")
             .child("Ctrl+K — find a room · Ctrl+B — toggle navigation")
+            .child("Ctrl+F — search loaded messages · F3 / Shift+F3 — next / previous match")
             .child("Ctrl+PageUp — earlier history · Ctrl+PageDown — latest")
             .child("Right-click a message, or Tab to its actions button and press Enter")
             .child("With a message focused: R — reply · Ctrl+Shift+C — copy message")
             .child("Ctrl+Shift+U — mark this room read")
             .child("Ctrl+C — copy selected text · Escape — close menu or cancel reply")
-            .child("Unread counts cover messages received during this session. Mention badges use server-provided mention IDs, not matching text.")));
+            .child("Unread counts cover received and fetched messages. Mention badges use server-provided mention IDs, not matching text.")));
     }
     fn listing(&mut self, list: &Value) {
         model::update_rooms(&mut self.rooms, list);
@@ -415,6 +469,8 @@ impl Conversation {
         self.schedule_local(cx);
         self.anchor_unread = true;
         self.mention_index = 0;
+        self.reacting = None;
+        self.search_index = 0;
         self.room = room;
         self.generation += 1;
         self.loading = false;
@@ -432,6 +488,7 @@ impl Conversation {
         self.composer
             .update(cx, |s, cx| s.set_value(text, window, cx));
         self.rows = Rc::new(self.store.rows(&self.room));
+        self.update_matches(cx);
         self.scroller
             .update(cx, |s, cx| s.reset(self.rows.len(), cx));
         self.history(None, cx);
@@ -462,17 +519,24 @@ impl Conversation {
     fn refresh(&mut self, cx: &mut Context<Self>) {
         let next = self.store.rows(&self.room);
         let changes = model::splices(&self.rows, &next);
-        let changed: Vec<usize> = next
+        let old: BTreeMap<_, _> = self
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (m.id, (m.log, i > 0 && model::grouped(&self.rows[i - 1], m))))
+            .collect();
+        let changed: Vec<_> = next
             .iter()
             .enumerate()
             .filter(|(i, m)| {
-                self.rows
-                    .get(*i)
-                    .is_some_and(|old| old.id == m.id && old.log != m.log)
+                old.get(&m.id).is_some_and(|(log, group)| {
+                    *log != m.log || *group != (*i > 0 && model::grouped(&next[*i - 1], m))
+                })
             })
             .map(|(i, _)| i)
             .collect();
         self.rows = Rc::new(next);
+        self.update_matches(cx);
         self.scroller.update(cx, |s, cx| {
             for (range, count) in changes {
                 s.splice(range, count, cx);
@@ -484,6 +548,18 @@ impl Conversation {
     }
     pub(crate) fn event(&mut self, event: Event, window: &mut Window, cx: &mut Context<Self>) {
         match event {
+            Event::Reacted {
+                generation,
+                message,
+                result,
+            } => {
+                if generation == self.generation && self.reacting == Some(message) {
+                    self.reacting = None;
+                    if let Err(e) = result {
+                        self.error = e;
+                    }
+                }
+            }
             Event::Mutated { operation, result } => {
                 if self.mutation_pending == Some(operation) {
                     self.mutation_pending = None;
@@ -504,6 +580,7 @@ impl Conversation {
                 {
                     form.update(cx,|f,cx|f.finished(operation,Err("Connection changed; completion may be uncertain. Inspect the message before retrying.".into()),window,cx));
                 }
+                self.reacting = None;
                 self.status = s;
                 self.ready = false;
                 self.loading = false;
@@ -528,6 +605,7 @@ impl Conversation {
                 self.caps = caps;
                 self.ready = true;
                 self.status = "Connected".into();
+                self.reactions = Default::default();
                 self.store = Store::default();
                 self.rows = Rc::new(Vec::new());
                 let room = if self.rooms.contains_key(&self.room) {
@@ -575,6 +653,15 @@ impl Conversation {
                         self.read_visible(window, cx);
                     }
                 }
+                Some("reactions") => {
+                    self.reactions.apply(&frame["params"]);
+                    if let Some(id) = model::number(&frame["params"]["message_id"])
+                        && let Some(ix) = self.rows.iter().position(|m| m.id == id)
+                    {
+                        self.scroller
+                            .update(cx, |s, cx| s.remeasure_items(ix..ix + 1, cx));
+                    }
+                }
                 Some("room_update") => self.listing(&frame["params"]),
                 Some("activity") if frame["params"]["from"]["user_id"] == self.you => {
                     if let (Some(room), Some(id)) = (
@@ -603,7 +690,28 @@ impl Conversation {
                         self.store.apply(m.clone());
                     }
                 }
+                let mut reaction_ids = std::collections::BTreeSet::new();
+                for r in page["reactions"].as_array().into_iter().flatten() {
+                    self.reactions.apply(r);
+                    if let Some(id) = model::number(&r["message_id"]) {
+                        reaction_ids.insert(id);
+                    }
+                }
                 self.refresh(cx);
+                let affected: Vec<_> = self
+                    .rows
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, m)| reaction_ids.contains(&m.id))
+                    .map(|(i, _)| i)
+                    .collect();
+                if !affected.is_empty() {
+                    self.scroller.update(cx, |s, cx| {
+                        for i in affected {
+                            s.remeasure_items(i..i + 1, cx);
+                        }
+                    });
+                }
                 let anchor = self.anchor_unread;
                 self.anchor_unread = false;
                 self.reconcile_attention(window, cx, anchor);
@@ -792,6 +900,7 @@ impl Conversation {
     }
     fn row(
         m: Arc<Message>,
+        grouped: bool,
         owner: WeakEntity<Self>,
         window: &mut Window,
         cx: &mut App,
@@ -823,6 +932,18 @@ impl Conversation {
                     .to_string()
             })
             .unwrap_or_default();
+        let initial = name
+            .chars()
+            .next()
+            .unwrap_or('?')
+            .to_uppercase()
+            .to_string();
+        let avatar_color = crate::design::avatar(model::text(&raw["from"]["user_id"]), cx);
+        let reaction_owner = owner.clone();
+        let matched = owner.upgrade().is_some_and(|v| {
+            v.read(cx).searching
+                && v.read(cx).match_ids(cx).get(v.read(cx).search_index) == Some(&id)
+        });
         let edit_owner = owner.clone();
         let delete_owner = owner.clone();
         let reply_owner = owner.clone();
@@ -871,30 +992,85 @@ impl Conversation {
             .on_action(move |_: &CopyMessage, _, cx| {
                 cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))
             })
-            .when(mentioned, |d| d.bg(cx.theme().primary.opacity(0.05)))
+            .on_action(move |_: &ReactLike, _, cx| {
+                let _ = reaction_owner.update(cx, |v, cx| v.react(id, "👍", cx));
+            })
+            .on_action({
+                let o = owner.clone();
+                move |_: &ReactHeart, _, cx| {
+                    let _ = o.update(cx, |v, cx| v.react(id, "❤️", cx));
+                }
+            })
+            .on_action({
+                let o = owner.clone();
+                move |_: &ReactCelebrate, _, cx| {
+                    let _ = o.update(cx, |v, cx| v.react(id, "🎉", cx));
+                }
+            })
+            .on_action({
+                let o = owner.clone();
+                move |_: &ReactLaugh, _, cx| {
+                    let _ = o.update(cx, |v, cx| v.react(id, "😂", cx));
+                }
+            })
+            .rounded_lg()
+            .px_3()
+            .border_l_2()
+            .border_color(if mentioned || matched {
+                cx.theme().primary
+            } else {
+                cx.theme().transparent
+            })
+            .when(mentioned || matched, |d| {
+                d.bg(cx.theme().primary.opacity(0.08))
+            })
+            .hover(|d| d.bg(cx.theme().muted.opacity(0.65)))
             .flex()
             .flex_col()
             .gap_1()
             .min_w_0()
-            .py_2()
+            .py_1()
+            .pl(px(60.))
+            .when(!grouped, |d| {
+                d.mt_3().pt_2().child(
+                    div()
+                        .absolute()
+                        .left_3()
+                        .top_2()
+                        .size_8()
+                        .rounded_full()
+                        .bg(avatar_color.opacity(0.12))
+                        .text_color(avatar_color)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(initial),
+                )
+            })
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap_3()
-                    .child(
-                        div()
-                            .max_w_48()
-                            .truncate()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(name),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(timestamp),
-                    )
+                    .when(!grouped, |d| {
+                        d.child(
+                            div()
+                                .max_w_48()
+                                .truncate()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(avatar_color)
+                                .child(name),
+                        )
+                    })
+                    .when(!grouped, |d| {
+                        d.child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(timestamp.clone()),
+                        )
+                    })
                     .when(mentioned, |d| {
                         d.child(
                             div()
@@ -907,6 +1083,9 @@ impl Conversation {
                     .child(
                         Button::new(("message-actions", id))
                             .ghost()
+                            .absolute()
+                            .right_1()
+                            .top_1()
                             .xsmall()
                             .icon(IconName::Ellipsis)
                             .accessibility_label("Message actions")
@@ -916,8 +1095,8 @@ impl Conversation {
                             .opacity(if menu_open { 1. } else { 0. })
                             .group_hover(group, |s| s.opacity(1.))
                             .focus_visible(|s| s.opacity(1.))
-                            .dropdown_menu(move |menu, _, cx| {
-                                Self::message_menu(menu, id, &menu_owner, cx)
+                            .dropdown_menu(move |menu, w, cx| {
+                                Self::message_menu(menu, id, &menu_owner, w, cx)
                             })
                             .on_open_change(move |open, _, cx| {
                                 let _ = open_owner.update(cx, |v, cx| {
@@ -991,16 +1170,36 @@ impl Conversation {
                 }
             }
         }
-        row.context_menu(move |menu, _, cx| Self::message_menu(menu, id, &context_owner, cx))
+        if let Some(v) = owner.upgrade()
+            && !v.read(cx).reactions.totals(id).is_empty()
+        {
+            row = row.child(v.read(cx).reaction_chips(id, owner.clone(), cx));
+        }
+        row.context_menu(move |menu, w, cx| Self::message_menu(menu, id, &context_owner, w, cx))
             .into_any_element()
     }
-    fn message_menu(menu: PopupMenu, id: u64, owner: &WeakEntity<Self>, cx: &App) -> PopupMenu {
+    fn message_menu(
+        menu: PopupMenu,
+        id: u64,
+        owner: &WeakEntity<Self>,
+        w: &mut Window,
+        cx: &mut Context<PopupMenu>,
+    ) -> PopupMenu {
         let can_reply = owner
             .upgrade()
             .is_some_and(|v| v.read(cx).ready && v.read(cx).joined());
         let can_edit = owner.upgrade().is_some_and(|v| v.read(cx).can_mutate(id));
+        let can_react = owner.upgrade().is_some_and(|v| v.read(cx).can_react(id));
         menu.menu_with_disabled("Reply", Box::new(ReplyMessage), !can_reply)
             .menu("Copy message", Box::new(CopyMessage))
+            .when(can_react, |m| {
+                m.submenu("React…", w, cx, |m, _, _| {
+                    m.menu("👍  Like", Box::new(ReactLike))
+                        .menu("❤️  Love", Box::new(ReactHeart))
+                        .menu("🎉  Celebrate", Box::new(ReactCelebrate))
+                        .menu("😂  Laugh", Box::new(ReactLaugh))
+                })
+            })
             .when(can_edit, |m| {
                 m.separator()
                     .menu("Edit message…", Box::new(EditMessage))
@@ -1009,7 +1208,7 @@ impl Conversation {
     }
     fn navigation(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut pane = div()
-            .w_56()
+            .w_64()
             .min_w_48()
             .h_full()
             .flex_shrink_0()
@@ -1019,12 +1218,31 @@ impl Conversation {
             .border_r_1()
             .border_color(cx.theme().border)
             .child(
-                div().h_16().px_4().flex().items_center().child(
-                    div()
-                        .text_lg()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child("Apron"),
-                ),
+                div()
+                    .h_20()
+                    .px_5()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .child(
+                        div()
+                            .size_9()
+                            .rounded_lg()
+                            .bg(cx.theme().primary)
+                            .text_color(cx.theme().primary_foreground)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_lg()
+                            .font_weight(FontWeight::BOLD)
+                            .child("a"),
+                    )
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Apron"),
+                    ),
             )
             .child(
                 div()
@@ -1032,7 +1250,7 @@ impl Conversation {
                     .pb_2()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child("Rooms & threads"),
+                    .child("WORKSPACE"),
             );
         let mut rooms = div()
             .id("rooms")
@@ -1042,10 +1260,41 @@ impl Conversation {
             .px_2();
         let query = self.filter.read(cx).value().to_lowercase();
         pane = pane.child(
+            div().px_3().pb_3().child(
+                Input::new(&self.filter)
+                    .prefix(IconName::Search)
+                    .aria_label("Find a room")
+                    .w_full(),
+            ),
+        );
+        pane = pane.child(
             div()
                 .px_3()
                 .pb_3()
-                .child(Input::new(&self.filter).aria_label("Find a room").w_full()),
+                .flex()
+                .gap_2()
+                .child(
+                    Button::new("all-rooms")
+                        .ghost()
+                        .small()
+                        .label("All rooms")
+                        .selected(!self.unread_only)
+                        .on_click(cx.listener(|v, _, _, cx| {
+                            v.unread_only = false;
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    Button::new("unread-rooms")
+                        .ghost()
+                        .small()
+                        .label("Unread")
+                        .selected(self.unread_only)
+                        .on_click(cx.listener(|v, _, _, cx| {
+                            v.unread_only = true;
+                            cx.notify();
+                        })),
+                ),
         );
         let mut ordered: Vec<_> = self.rooms.iter().collect();
         ordered.sort_by_key(|(id, room)| {
@@ -1063,6 +1312,9 @@ impl Conversation {
             {
                 continue;
             }
+            if self.unread_only && self.attention.counts(id).0 == 0 {
+                continue;
+            }
             matches += 1;
             let target = id.clone();
             let title = model::clean(room["title"].as_str().unwrap_or(id), 80);
@@ -1072,6 +1324,13 @@ impl Conversation {
                     .ghost()
                     .selected(id == &self.room)
                     .w_full()
+                    .h_9()
+                    .mb_1()
+                    .when(room["parent_room_id"].is_string(), |b| b.ml_3().w(px(216.)))
+                    .when(id == &self.room, |b| {
+                        b.bg(cx.theme().accent).text_color(cx.theme().primary)
+                    })
+                    .when(unread > 0, |b| b.font_weight(FontWeight::SEMIBOLD))
                     .justify_start()
                     .child(
                         div()
@@ -1088,13 +1347,20 @@ impl Conversation {
                                 }
                             )))
                             .when(unread > 0, |d| {
-                                d.child(div().text_xs().font_weight(FontWeight::SEMIBOLD).child(
-                                    if mentions > 0 {
-                                        format!("{unread} · @{mentions}")
-                                    } else {
-                                        unread.to_string()
-                                    },
-                                ))
+                                d.child(
+                                    div()
+                                        .px_2()
+                                        .rounded_full()
+                                        .bg(cx.theme().primary)
+                                        .text_color(cx.theme().primary_foreground)
+                                        .text_xs()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child(if mentions > 0 {
+                                            format!("{unread} · @{mentions}")
+                                        } else {
+                                            unread.to_string()
+                                        }),
+                                )
                             }),
                     )
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -1111,7 +1377,11 @@ impl Conversation {
                     .child(if !query.is_empty() {
                         "No matching rooms"
                     } else if self.ready {
-                        "No rooms available"
+                        if self.unread_only {
+                            "You’re all caught up"
+                        } else {
+                            "No rooms available"
+                        }
                     } else {
                         "Rooms appear after connecting"
                     }),
@@ -1119,7 +1389,12 @@ impl Conversation {
         }
         pane = pane.child(rooms).child(
             div()
-                .p_4()
+                .m_3()
+                .p_3()
+                .rounded_lg()
+                .bg(cx.theme().background)
+                .border_1()
+                .border_color(cx.theme().border)
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
                 .child(if !self.ready {
@@ -1150,7 +1425,7 @@ impl Conversation {
             .to_owned();
         let content_width = window.viewport_size().width
             - if self.sidebar_visible(window) {
-                window.rem_size() * 14.
+                window.rem_size() * 16.
             } else {
                 px(0.)
             };
@@ -1169,9 +1444,33 @@ impl Conversation {
                 Button::new("toggle-rooms")
                     .ghost()
                     .small()
-                    .label("Rooms")
+                    .icon(IconName::PanelLeft)
+                    .accessibility_label("Toggle rooms")
+                    .tooltip("Toggle rooms · Ctrl+B")
                     .selected(self.sidebar_visible(window))
                     .on_click(cx.listener(|this, _, window, cx| this.toggle_rooms(window, cx))),
+            )
+            .child(
+                div()
+                    .size_8()
+                    .rounded_lg()
+                    .bg(cx.theme().muted)
+                    .text_color(cx.theme().muted_foreground)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_lg()
+                    .child(
+                        if self
+                            .rooms
+                            .get(&self.room)
+                            .is_some_and(|r| r["parent_room_id"].is_string())
+                        {
+                            "↳"
+                        } else {
+                            "#"
+                        },
+                    ),
             )
             .child(
                 div()
@@ -1193,6 +1492,15 @@ impl Conversation {
                             .text_color(cx.theme().muted_foreground)
                             .child(self.status.clone()),
                     ),
+            )
+            .child(
+                Button::new("find-messages")
+                    .ghost()
+                    .small()
+                    .icon(IconName::Search)
+                    .accessibility_label("Search loaded messages")
+                    .tooltip("Search loaded messages · Ctrl+F")
+                    .on_click(cx.listener(|v, _, w, cx| v.open_search(w, cx))),
             )
             .when(show_history, |d| {
                 d.child(
@@ -1265,6 +1573,7 @@ impl Conversation {
                             .menu("Sign in with token…", Box::new(OpenSession))
                             .menu("Next unread mention", Box::new(NextMention))
                             .menu("Local data…", Box::new(OpenPrivacy))
+                            .menu("Switch light / dark", Box::new(ToggleTheme))
                             .menu("Keyboard shortcuts…", Box::new(ShowHelp))
                     })
                     .on_open_change(cx.listener(|this, open, _, cx| {
@@ -1293,7 +1602,7 @@ impl Conversation {
     fn compose(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let content_width = window.viewport_size().width
             - if self.sidebar_visible(window) {
-                window.rem_size() * 14.
+                window.rem_size() * 16.
             } else {
                 px(0.)
             };
@@ -1325,9 +1634,12 @@ impl Conversation {
             .flex()
             .flex_col()
             .gap_2()
-            .px_6()
-            .py_4()
-            .border_t_1()
+            .m_4()
+            .mt_2()
+            .p_3()
+            .rounded_xl()
+            .bg(cx.theme().background)
+            .border_1()
             .border_color(cx.theme().border);
         if let Some(reply) = self.reply {
             pane = pane.child(
@@ -1335,6 +1647,12 @@ impl Conversation {
                     .flex()
                     .items_center()
                     .gap_2()
+                    .px_3()
+                    .py_2()
+                    .rounded_md()
+                    .bg(cx.theme().accent)
+                    .border_l_2()
+                    .border_color(cx.theme().primary)
                     .text_sm()
                     .child(
                         div()
@@ -1369,6 +1687,7 @@ impl Conversation {
         }
         pane = pane.child(
             Textarea::new(&self.composer)
+                .appearance(false)
                 .aria_label("Message")
                 .accessibility_id("composer")
                 .w_full(),
@@ -1385,7 +1704,9 @@ impl Conversation {
                         .flex_shrink_0()
                         .ghost()
                         .small()
-                        .label("Attach files…")
+                        .icon(IconName::Plus)
+                        .accessibility_label("Attach files")
+                        .tooltip("Attach files…")
                         .disabled(
                             !self.ready
                                 || self.pending
@@ -1398,7 +1719,9 @@ impl Conversation {
                     Button::new("mention-person")
                         .ghost()
                         .small()
-                        .label("@ Mention")
+                        .label("@")
+                        .accessibility_label("Mention a person")
+                        .tooltip("Mention a person")
                         .on_click(cx.listener(|v, _, w, cx| {
                             v.composer.update(cx, |s, cx| {
                                 s.replace("@", w, cx);
@@ -1411,7 +1734,9 @@ impl Conversation {
                     Button::new("preview-markdown")
                         .ghost()
                         .small()
-                        .label("Preview…")
+                        .icon(IconName::Eye)
+                        .accessibility_label("Preview Markdown")
+                        .tooltip("Preview Markdown…")
                         .on_click(cx.listener(|v, _, w, cx| v.preview_markdown(w, cx))),
                 )
                 .child(
@@ -1421,7 +1746,7 @@ impl Conversation {
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
                         .when(show_hint, |d| {
-                            d.child("Ctrl+Enter to send · text stays local until sent")
+                            d.child("Markdown supported  ·  Ctrl+Enter to send")
                         }),
                 )
                 .child(
@@ -1455,6 +1780,7 @@ impl Conversation {
 }
 impl Render for Conversation {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::design::apply(cx);
         let started = std::time::Instant::now();
         if self.inspect {
             self.geometry.borrow_mut().clear();
@@ -1467,13 +1793,15 @@ impl Render for Conversation {
             .h_full()
             .flex()
             .flex_col()
-            .child(self.header(window, cx));
+            .child(self.header(window, cx))
+            .when(self.searching, |d| d.child(self.search_bar(cx)));
         if !self.error.is_empty() {
             content = content.child(
                 div()
                     .px_6()
                     .py_2()
                     .text_sm()
+                    .bg(cx.theme().danger.opacity(0.08))
                     .text_color(cx.theme().danger)
                     .child(model::clean(&self.error, 500)),
             );
@@ -1498,14 +1826,23 @@ impl Render for Conversation {
                             .rendered_rows
                             .set(e.read(cx).rendered_rows.get() + 1);
                     }
-                    Self::row(m.clone(), owner.clone(), window, cx)
+                    Self::row(
+                        m.clone(),
+                        ix > 0
+                            && rows
+                                .get(ix - 1)
+                                .is_some_and(|prev| apron_gpui::model::grouped(prev, m)),
+                        owner.clone(),
+                        window,
+                        cx,
+                    )
                 } else {
                     div().into_any_element()
                 }
             },
         )
-        .with_list_style(StyleRefinement::default().px_6().py_3())
-        .with_row_style(StyleRefinement::default().pb_2())
+        .with_list_style(StyleRefinement::default().px_3().py_3())
+        .with_row_style(StyleRefinement::default().pb_1())
         .with_jump_button_renderer(|b| b.label("Latest").small())
         .with_jump_button_transition(Duration::ZERO);
         let transcript = if self.rows.is_empty() {
@@ -1517,6 +1854,18 @@ impl Render for Conversation {
                 .justify_center()
                 .gap_2()
                 .text_color(cx.theme().muted_foreground)
+                .child(
+                    div()
+                        .size_12()
+                        .rounded_xl()
+                        .bg(cx.theme().muted)
+                        .text_color(cx.theme().primary)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_2xl()
+                        .child("#"),
+                )
                 .child(if self.loading {
                     "Loading conversation…"
                 } else if self.status == "Sign-in required" {
@@ -1563,6 +1912,10 @@ impl Render for Conversation {
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .text_sm()
+            .on_action(cx.listener(|v,_:&FindMessages,w,cx|v.open_search(w,cx)))
+            .on_action(cx.listener(|v,_:&NextMatch,_,cx|v.step_match(true,cx)))
+            .on_action(cx.listener(|v,_:&PreviousMatch,_,cx|v.step_match(false,cx)))
+            .on_action(cx.listener(|_,_:&ToggleTheme,w,cx| {use gpui_kit::component::{Theme,ThemeMode};let mode=if cx.theme().is_dark(){ThemeMode::Light}else{ThemeMode::Dark};Theme::change(mode,Some(w),cx);crate::design::apply(cx);}))
             .on_action(cx.listener(|this, _: &SendMessage, window, cx| this.send(window, cx)))
             .on_action(cx.listener(|this, _: &FindRoom, window, cx| {
                 this.sidebar = Some(true);
@@ -1585,8 +1938,10 @@ impl Render for Conversation {
             .on_action(cx.listener(|this, _: &Latest, _, cx| {
                 this.scroller.update(cx, |s, cx| s.scroll_to_end(cx))
             }))
-            .on_action(cx.listener(|this, _: &CancelReply, _, cx| {
-                this.reply = None;
+            .on_action(cx.listener(|this, _: &CancelReply, w, cx| {
+                if this.searching && this.search.focus_handle(cx).is_focused(w) {
+                    this.searching=false;this.composer.update(cx,|s,cx|s.focus(w,cx));
+                }else{this.reply = None;}
                 cx.notify();
             }))
             .on_action(

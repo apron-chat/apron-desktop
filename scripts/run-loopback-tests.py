@@ -21,6 +21,7 @@ def main():
     # Never connect the integration suite to a pre-existing (possibly real) server.
     for port in (18765, 18766):
         with socket.socket() as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
                 probe.bind(('127.0.0.1', port))
             except OSError:

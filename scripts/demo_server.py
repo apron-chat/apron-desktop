@@ -54,7 +54,7 @@ async def handler(ws):
         await ws.send(json.dumps(frame))
     try:
         await send({'method': 'server', 'params': {'apron': 8, 'auth': ['guest', 'token'],
-                    'capabilities': ['rooms', 'history', 'activity'], 'ping': 20, 'agent': 'fictional-local-fixture/1'}})
+                    'capabilities': ['rooms', 'history', 'activity', 'reactions'], 'ping': 20, 'agent': 'fictional-local-fixture/1'}})
         async for raw in ws:
             req = json.loads(raw)
             method, p, rid = req.get('method'), req.get('params', {}), req.get('id')
@@ -81,6 +81,13 @@ async def handler(ws):
                 result = {'messages': page, 'more': len(selected) > len(page), 'latest_log_id': record(ROOMS[room_id])['latest_log_id'], 'history_log_id': str(BASE)}
                 if page:
                     result.update(first_log_id=page[0]['log_id'], last_log_id=page[-1]['log_id'])
+            elif method == 'reactions':
+                COUNTER = max(COUNTER + 1, int(time.time() * 1000))
+                reaction_record = {'message_id': p['message_id'], 'log_id': str(COUNTER), 'room_id': 'general', 'reactions': [{'from': YOU, 'emojis': p.get('emojis', [])}]}
+                for client in list(CLIENTS):
+                    try: await client.send(json.dumps({'method': 'reactions', 'params': reaction_record}))
+                    except websockets.ConnectionClosed: pass
+                result = {}
             elif method == 'message':
                 room_id = p.get('room_id', 'general')
                 if p.get('body', {}).get('text') == '/test-disconnect':

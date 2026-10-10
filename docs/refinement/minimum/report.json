@@ -1,0 +1,20 @@
+{
+  "loaded_search_keyboard": true,
+  "reaction_menu_add_remove": true,
+  "native_wayland": true,
+  "context_menu_reply_target": true,
+  "context_menu_copy": true,
+  "keyboard_menu_navigation": true,
+  "toolbar_session_menu": true,
+  "tab_reaches_message_actions": true,
+  "keyboard_only_reply": true,
+  "escape_cancels_reply": true,
+  "ctrl_k_focuses_room_filter": true,
+  "background_unread_mention": true,
+  "history_reading_preserves_unread": true,
+  "keyboard_mark_read": true,
+  "escape_dismisses_masked_token_dialog": true,
+  "rejected_token_error": true,
+  "valid_token_session": true,
+  "synthetic_data_only": true
+}

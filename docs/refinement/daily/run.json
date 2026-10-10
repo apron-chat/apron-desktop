@@ -1,0 +1,10 @@
+{
+  "mode": "daily-smoke",
+  "viewport": [
+    1280,
+    900
+  ],
+  "binary_sha256": "9acae85dea2d809acab5b61c672025634ae7230159c6115fa54829cbd41bb3b8",
+  "synthetic_owned_server": true,
+  "native_exit": 0
+}

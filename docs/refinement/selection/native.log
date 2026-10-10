@@ -1,0 +1,8 @@
+dbus-daemon[10312]: [session uid=1000 pid=10312 pidfd=5] Activating service name='org.a11y.Bus' requested by ':1.1' (uid=1000 pid=10313 comm="/workspace/apron-gpui/artifacts/refined-verified-a" label="kernel")
+dbus-daemon[10312]: [session uid=1000 pid=10312 pidfd=5] Successfully activated service 'org.a11y.Bus'
+Selection target 1791536401041: Bounds { origin: Point { x: 330px, y: 123px }, size: Size { 926px × 23px } }
+Selection passed: "ocal fixture note 41: m\n"
+Anchor passed: 0
+Room switches passed
+Keyboard reply passed
+{"native_wayland":true,"drag_selection":"ocal fixture note 41: m\n","clipboard_matches_trimmed_selection":true,"external_wayland_clipboard":true,"prepend_anchor_delta_px":0.0,"selection_survives_prepend":true,"stale_response_rejected":true,"rapid_room_switches":true,"keyboard_reply_sent":true,"escape_cancels_reply":true,"keyboard_navigation_toggle":true,"room_draft_restored":true,"permission_denied_retains_connection_and_draft":true,"interrupted_send_no_resend_and_draft_retained":true}

@@ -1,14 +1,21 @@
-# Apron GPUI
+# apron-desktop
+
+This repo is experimenting with desktop-native implementations of an Apron client.
+
+## GPUI native client
 
 A standalone Rust/GPUI Kit client for Apron 8, with a virtualized conversation
 view, selectable Markdown, room/thread navigation, replies, session token sign-in,
 mentions, image/file transfers, contextual editing and opt-in private drafts.
 This branch contains only the GPUI implementation. The GTK implementation remains
-an independent alternative in [PR #1](https://github.com/apron-chat/apron-gtk/pull/1).
+an independent alternative in [PR #1](https://github.com/apron-chat/apron-desktop/pull/1).
 There is no GTK or Python application runtime/build dependency; Python is used
 only by optional synthetic test tools. Full apron-web parity remains deferred.
 
-![Native Wayland preview using fictional messages](docs/preview.png)
+![Native Wayland preview using fictional messages](docs/refinement/desktop/report-wide.png)
+
+See [REFINEMENT.md](REFINEMENT.md) for the Swiftcord-inspired design pass,
+new daily-chat workflows, native screenshots and regression evidence.
 
 ## Build and launch on NixOS / niri
 
@@ -79,6 +86,22 @@ The address is supplied at launch, not through an in-app settings dialog.
   filters local room IDs/titles, not remote message history. Live room rename/leave
   deltas update the index. Minimum window is 640×480; cramped panes move history
   controls into the menu and omit the composer hint to preserve the Send action.
+- Conversation search: Ctrl+F searches text in the current room's retained messages.
+  Enter/F3 and Shift+F3 move between matches; Escape from the search field closes it.
+  Results are cached between data/query changes. The count explicitly says “loaded
+  only”; paginate manually to extend the search. It never searches a remote archive.
+- Reactions, when advertised: the contextual React submenu offers Like, Love,
+  Celebrate and Laugh. Existing reaction chips show totals and toggle your set.
+  Updates replace a user's complete known set, ordered by log ID; empty sets remove
+  reactions. No optimistic counts or automatic retries after uncertain completion.
+  Limits: 2,048 message/user sets, 16 emoji per set, 64 bytes per emoji; oversized
+  sets are ignored. Counts and your set cover retained/fetched evidence; unseen or
+  evicted older reactions may be absent. A complete historical reaction census and
+  an arbitrary emoji picker are deferred.
+- The sidebar's Unread view filters received/fetched unread rooms. A semantic blue
+  selection, nested threads, deterministic local author initials, and compact
+  same-author runs improve scanning. Initials require no avatar downloads.
+  Conversation menu → Switch light / dark changes this session's appearance.
 - Contextual message actions: right-click, or Tab to a row’s ellipsis and press
   Enter. Reply/Copy labels no longer repeat on every row. Menus support arrows,
   Enter and Escape. With message actions focused, R replies and Ctrl+Shift+C
@@ -122,9 +145,9 @@ The address is supplied at launch, not through an in-app settings dialog.
   reconnects with a generic error that cannot echo token input.
 
 **Deferred:** email/OAuth/account creation, keyring token storage, complete offline unread recovery,
-notifications, room creation/moderation, reactions, presence/typing, settings,
+notifications, room creation/moderation, presence/typing, durable appearance settings,
 remote message search, WYSIWYG compose, active external links, drag/drop,
-full apron-web feature parity.
+full apron-web feature parity. Reactions and local search have the bounds described above.
 Room lists and draft count are capped at 256; room-list pagination is not implemented.
 
 The transport owns its own Tokio runtime; GPUI awaits events without busy polling.
@@ -154,12 +177,13 @@ Image upload creates the message before transferring bytes. On failure/cancel,
 inspect the posted message before retrying; the app does not automatically repost.
 Clipboard previews are session-only and clear when switching rooms.
 
-See [DAILY_USE.md](DAILY_USE.md) for the latest implementation/test matrix and visual review.
+See [REFINEMENT.md](REFINEMENT.md) for current validation and visual review;
+[DAILY_USE.md](DAILY_USE.md) retains the earlier daily-use implementation evidence.
 
 ## Verification
 
 All commands run from the repository root. Python scripts here are optional test
-fixtures, not application modules. To run the four integration tests, build the
+fixtures, not application modules. To run the five integration tests, build the
 [official Apron server](https://github.com/shazow/apron) separately, then use:
 
 ```sh
@@ -223,4 +247,5 @@ See [DESIGN_REVIEW.md](DESIGN_REVIEW.md) for the screenshot critique, changes an
 actual native checks, and [FEATURE_PARITY.md](FEATURE_PARITY.md) for implemented
 versus deferred product scope. The GPUI draft PR targets main independently of the GTK alternative. Existing
 history is preserved, but the current tree and source archive contain no GTK client.
-See [STANDALONE.md](STANDALONE.md) for the layout and verification of this change.
+See [STANDALONE.md](STANDALONE.md) for the original layout migration and
+[REFINEMENT.md](REFINEMENT.md) for the current design, features and verification.
