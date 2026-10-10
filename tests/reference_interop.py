@@ -74,6 +74,24 @@ class OfficialGoInterop(unittest.TestCase):
         self.assertIsNone(pages[0][1])
         self.assertTrue(any('Synthetic pagination' in m.get('body', {}).get('text', '') for m in s.store.timeline('general')))
 
+    def test_archived_page_forward_reconciliation(self):
+        from apron_native.actions import message_save
+        from apron_native.model import Store
+        rid = self.request('room_set', {'title':'Synthetic archived reconciliation'})['room_id']
+        mids = [self.request('message', {'room_id':rid,'body':{'text':f'Original {i}'}})['message_id'] for i in range(65)]
+        before = mids[30]
+        self.request('message', message_save(self.s.store.messages[mids[0]], text='Edited after page'))
+        self.request('message', message_save(self.s.store.messages[mids[1]], deleted=True))
+        other = self.request('room_set', {'title':'Synthetic move destination'})['room_id']
+        self.request('message', message_save(self.s.store.messages[mids[2]], room_id=other))
+        you = self.s.store.you
+        self.s.store = Store(); self.s.store.you = you  # no newer cached snapshot can mask a recovery bug
+        pages=[];self.s.history(rid,before,lambda *a:pages.append(a))
+        self.wait(lambda:bool(pages));self.assertIsNone(pages[0][1])
+        self.assertEqual(self.s.store.messages[mids[0]]['body']['text'],'Edited after page')
+        self.assertTrue(self.s.store.messages[mids[1]]['deleted'])
+        self.assertEqual(self.s.store.messages[mids[2]]['room_id'],other)
+
     def test_daily_message_and_room_actions(self):
         from apron_native.actions import message_save
         profile = self.request('me', {'name':'Synthetic Native Profile'})

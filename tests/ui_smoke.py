@@ -21,7 +21,7 @@ def wait(predicate, seconds=8):
     end = time.monotonic() + seconds
     while time.monotonic() < end:
         while ctx.pending(): ctx.iteration(False)
-        if predicate():
+        if predicate() and not win.rendering:
             return
         time.sleep(.01)
     raise AssertionError('GTK smoke timeout: ' + win.session.state)

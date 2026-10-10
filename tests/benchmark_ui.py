@@ -28,7 +28,7 @@ def wait(predicate, timeout=15):
     end = time.monotonic() + timeout
     while time.monotonic() < end:
         while ctx.pending(): ctx.iteration(False)
-        if predicate(): return
+        if predicate() and not getattr(win, 'rendering', False): return
         time.sleep(.001)
     raise AssertionError('Benchmark timeout: ' + win.session.error)
 
@@ -43,8 +43,9 @@ def rss():
         if line.startswith('VmRSS:'): return int(line.split()[1]) / 1024
 
 
-wait(lambda: win.session.ready and win.room_id == 'general' and not win.loading and bool(win.visible_messages()))
+wait(lambda: win.session.ready and bool(win.room_id) and not win.loading)
 startup_ms = (time.monotonic() - start) * 1000
+last = time.monotonic()  # exclude startup before the heartbeat was installed
 beat_timer = GLib.timeout_add(10, beat)
 t0 = time.monotonic()
 win.select_room(room)

@@ -55,4 +55,6 @@ local data. The regression test also verifies that an incoming snapshot does
 not destroy an open message menu. Native daily-action tests cover repeated
 submission and stale/interrupted edit guards. See TEST_RESULTS.md for exact
 checks and unverified environments. No formal accessibility audit or new
-performance benchmark was performed for this design pass.
+performance benchmark was performed for the original design pass. The subsequent
+incremental-history milestone preserves this layout and updates Preferences with
+opt-in draft/read storage and reset controls; see TEST_RESULTS.md for its measurements.

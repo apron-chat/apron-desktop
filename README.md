@@ -60,8 +60,8 @@ system keyring** is optional and requires libsecret plus an unlocked Secret
 Service provider (for example a configured desktop keyring). Use **Use saved
 session** in the connection dialog to retrieve one; Forget removes it. There
 is no plaintext file fallback. The native keyring adapter is implemented, but
-actual service operation was not testable in this environment. Rooms, messages,
-drafts and read markers are not written to disk. Connection/name and appearance
+actual service operation was not testable in this environment. Message history is never written to disk. Drafts/read markers stay in memory
+unless **Preferences → Save drafts and read markers on this device** is enabled. Connection/name and appearance
 preferences can be remembered separately. Do not use a real token for tests.
 
 In the supplied workspace, native dependencies were extracted under `.deps`
@@ -83,6 +83,38 @@ remain visible. History controls appear only when relevant.
 
 See [DESIGN.md](DESIGN.md) for the visual system, before/after captures, and
 light, dark, compact, dialog and interrupted-connection previews.
+
+## Local data and recovery
+
+Local draft/read storage is **off by default**. When enabled, it stores plaintext
+composers (including reply IDs and mention IDs) and read cursors in
+`$XDG_CONFIG_HOME/apron-native/local-state.json` (normally `~/.config/apron-native/`).
+Each profile is keyed by the exact validated server URL and authenticated user
+ID. A new guest identity cannot inherit another identity's drafts. No tokens,
+received messages, or room/member lists enter this file.
+
+Storage is capped at 1 MiB total and 8 profiles, 256 rooms per profile, 32,000
+UTF-8 bytes per draft and 768 KiB of drafts per profile. Older saved data is
+evicted to stay within these limits. Writes coalesce after 750 ms of changes,
+run on one worker, use atomic replacement with mode 0600 and fsync, and flush on
+normal close. A crash can lose changes in the debounce interval. Concurrent
+client instances use last-writer-wins files; cross-process merging is not supported.
+
+Disabling storage deletes the saved file. **Reset local drafts and read markers…**
+asks for confirmation, disables storage, clears current drafts/read markers and
+queues deletion for every saved server/profile. It does not delete server
+messages, preferences or keyring tokens. Use the separate keyring Forget action
+for saved authentication. Filesystem deletion cannot erase backups or guarantee
+secure physical erasure.
+
+History remains bounded in RAM. An older page is replayed forward to its captured
+log horizon before display, covering later edits, deletes, moves and reactions.
+Only the selected page's projection is held during this scan. Opened rooms also
+recover available unread/mentions from a known read cursor on latest/reconnect;
+recovered history never emits desktop notifications. Each scan allows at most
+128 sequential 50-record requests. Expired history or the scan budget produces
+an explicit warning; an unverifiable older page is not committed. This is not
+a durable full-room log cache or background recovery of every room.
 
 ## What works
 
@@ -126,8 +158,10 @@ light, dark, compact, dialog and interrupted-connection previews.
 ## Bounds and architecture
 
 `model.py` is a GTK-independent state reducer. `session.py` owns libsoup and
-request/timer lifecycles on the GLib main context. `app.py` builds native GTK
-widgets and coalesces redraws; `ui_actions.py` owns dialogs, `actions.py` preserves
+request/timer lifecycles on the GLib main context. `recovery.py` performs bounded
+fixed-horizon scans; `local_state.py` validates and asynchronously persists
+optional draft/read state. `app.py` builds native GTK
+widgets, reuses unchanged rows and creates at most two new rows per 16-ms batch; `ui_actions.py` owns dialogs, `actions.py` preserves
 message fields, `preferences.py` persists allowlisted non-secret settings, and
 `keyring.py` delegates credentials exclusively to Secret Service. `render.py` converts CommonMark to an allowlisted
 Pango subset. No worker polling loop is used.
@@ -148,12 +182,10 @@ bounded and control/bidi override characters are removed for display.
   validation; they are not yet verified end to end. The public Apron demo may permit
   guest reading but require passkeys for writing; use the local fixture or a
   server that permits guest/token writes for this slice.
-- Recovery discards the prior cache after authentication and fetches a fresh
-  **latest window** when a room is opened. It does not replay the complete log
-  to a durable checkpoint, recover all missed unread/mentions, or persist unread
-  state across restarts. Archived pages show available snapshots, not a proven
-  complete present-day projection after arbitrary cache eviction. Use Latest
-  to refresh. Large-history recovery needs a separate persistent store design.
+- Reconnect discards the received-message cache, restores eligible local read
+  cursors, and loads the selected room. Forward recovery is bounded to 128 pages
+  per scan, with explicit incomplete/retention feedback. No durable log checkpoint,
+  all-room recovery, or offline message cache is implemented.
 - Room membership state replays, but timeline membership-event grouping,
   user-ID alias/rename reconciliation, and full live status semantics are incomplete.
   Unread/mention badges cover newly delivered creations, not mention additions
@@ -165,21 +197,17 @@ bounded and control/bidi override characters are removed for display.
 
 ## Measured performance
 
-On the Debian workspace under headless Weston with software rendering, a
-1,000-message official-server room (1,045 text bytes/message) showed **78.7 MiB
-RSS** after loading 11 pages, and **0.011% of one CPU core** over a 10.05-second
-idle sample. The latest benchmark page took 503 ms; ten older pages took
-506–599 ms (median 526 ms). Only 50 messages were rendered, with 591 messages
-and about 664 KiB of serialized data cached across rooms.
+The 1,000-message loopback benchmark (1,045 text bytes per message) measured
+**151 ms worst 10-ms heartbeat interval**, down from **502 ms** after the visual
+design pass and **548 ms** in the earlier daily-chat build. Final client RSS was
+**78.5 MiB**, with **0.072% of one CPU core** over a 9.89-second idle sample.
 
-These measurements precede the visual design pass; performance was not
-remeasured after it. They are one-run warm-loopback measurements, not hardware-independent targets.
-They exclude server/compositor CPU and memory. Idle behavior is encouraging,
-but long-message pages still caused a **548 ms worst event-loop interval**:
-row virtualization/incremental layout is needed before calling heavy-history
-interaction consistently responsive. Avoiding an unnecessary loading-state
-rebuild roughly halved page-load time in this synthetic test. See TEST_RESULTS
-and the included raw measurements for method and caveats.
+The tradeoff is longer full-page completion: latest 882 ms; ten reconciled older
+pages 825–1,321 ms (median 927 ms). GTK yields between row batches and unchanged
+rows retain identity and scroll position. There are still long frames; this is
+incremental rendering, not viewport virtualization or a frame-time guarantee.
+Measurements are single warm software-rendered Weston runs, not general targets.
+See TEST_RESULTS and `docs/benchmark-*.json` for method and limitations.
 
 ## Verification
 
@@ -190,6 +218,7 @@ python -m unittest discover -s tests -p 'test_*.py' -v
 # With a Wayland compositor running and the fixture still running:
 GDK_BACKEND=wayland python tests/ui_smoke.py /tmp/apron-preview.png
 GDK_BACKEND=wayland python tests/design_smoke.py /tmp/apron-design
+GDK_BACKEND=wayland python tests/ui_recovery_smoke.py
 ```
 
 The fixture binds only `127.0.0.1:18765`, uses fictional people/messages, keeps

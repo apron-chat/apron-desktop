@@ -8,14 +8,15 @@ from apron_native.app import App, Gtk
 app=App(argparse.Namespace(demo=False,server='ws://127.0.0.1:18766/ws',screenshot=None))
 app.register(None);app.activate();win=app.get_active_window();ctx=GLib.MainContext.default()
 errors=[]
-sys.excepthook=lambda *args: errors.append(args)
+original_hook=sys.excepthook
+sys.excepthook=lambda *args: (errors.append(args), original_hook(*args))
 
 
 def wait(predicate, timeout=8):
     end=time.monotonic()+timeout
     while time.monotonic()<end:
         while ctx.pending():ctx.iteration(False)
-        if predicate():return
+        if predicate() and not win.rendering:return
         time.sleep(.005)
     raise AssertionError('Native daily-flow timeout: '+win.session.error)
 

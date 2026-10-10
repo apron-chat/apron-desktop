@@ -122,24 +122,29 @@ class Store:
         self.messages.move_to_end(mid)
         if rid not in self.rooms:
             self.room({'room_id': rid})
-        if live and not old and log == number(mid) and msg.get('from', {}).get('user_id') != self.you.get('user_id'):
-            if number(mid) > self.reads.get(rid, 0):
-                ids = self.unread_ids.setdefault(rid, set())
-                ids.add(mid)
-                if len(ids) > 999:
-                    ids.remove(min(ids, key=number))
-                self.unread[rid] = len(ids)
-                if self.you.get('user_id') in msg.get('body', {}).get('mentions', []):
-                    ids = self.mention_ids.setdefault(rid, set())
-                    ids.add(mid)
-                    if len(ids) > 999:
-                        ids.remove(min(ids, key=number))
-                    self.mentions[rid] = len(ids)
+        if msg.get('deleted') or (old and old.get('room_id') != rid):
+            for old_rid in {rid, old.get('room_id') if old else rid}:
+                for ids_map, counts in ((self.unread_ids, self.unread), (self.mention_ids, self.mentions)):
+                    ids_map.get(old_rid, set()).discard(mid)
+                    if old_rid in ids_map: counts[old_rid] = len(ids_map[old_rid])
+        if live and not msg.get('deleted') and not old and log == number(mid) and msg.get('from', {}).get('user_id') != self.you.get('user_id'):
+            self.note_unread(msg)
         while len(self.messages) > MAX_MESSAGES or self.cache_bytes > MAX_CACHE_BYTES:
             evicted, _ = self.messages.popitem(last=False)
             self.cache_bytes -= self.message_sizes.pop(evicted)
             self.evicted = True
         return True
+
+    def note_unread(self, msg):
+        mid, rid = msg['message_id'], msg['room_id']
+        if msg.get('deleted') or msg.get('from', {}).get('user_id') == self.you.get('user_id') or number(mid) <= self.reads.get(rid, 0): return
+        ids = self.unread_ids.setdefault(rid, set()); ids.add(mid)
+        if len(ids) > 999: ids.remove(min(ids, key=number))
+        self.unread[rid] = len(ids)
+        if self.you.get('user_id') in msg.get('body', {}).get('mentions', []):
+            ids = self.mention_ids.setdefault(rid, set()); ids.add(mid)
+            if len(ids) > 999: ids.remove(min(ids, key=number))
+            self.mentions[rid] = len(ids)
 
     def timeline(self, rid):
         return sorted((m for m in self.messages.values() if m['room_id'] == rid), key=lambda m: number(m['message_id']))
@@ -151,6 +156,15 @@ class Store:
         for ids_map, counts in ((self.unread_ids, self.unread), (self.mention_ids, self.mentions)):
             ids_map[rid] = {i for i in ids_map.get(rid, set()) if number(i) > self.reads[rid]}
             counts[rid] = len(ids_map[rid])
+
+    def discard_room_history(self, rid):
+        removed = {mid for mid, msg in self.messages.items() if msg['room_id'] == rid}
+        for mid in removed:
+            del self.messages[mid]; self.cache_bytes -= self.message_sizes.pop(mid)
+        for key in list(self.reactions):
+            if key[0] in removed: del self.reactions[key]
+        self.unread_ids.pop(rid, None); self.mention_ids.pop(rid, None)
+        self.unread.pop(rid, None); self.mentions.pop(rid, None)
 
     def history(self, rid, result):
         latest = number(result['latest_log_id'])

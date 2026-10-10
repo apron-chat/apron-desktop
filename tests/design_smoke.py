@@ -17,7 +17,7 @@ def wait(predicate,seconds=8):
     deadline=time.monotonic()+seconds
     while time.monotonic()<deadline:
         while ctx.pending():ctx.iteration(False)
-        if predicate():return
+        if predicate() and not win.rendering:return
         time.sleep(.005)
     raise AssertionError('Design smoke timeout: '+win.session.error)
 

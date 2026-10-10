@@ -288,20 +288,25 @@ class DailyActions:
         root.append(theme)
         remember = Gtk.CheckButton(label='Remember server address and display name', active=self.preferences.data.get('remember', False))
         notifications = Gtk.CheckButton(label='Notify about mentions while this window is inactive', active=self.preferences.data.get('notifications', False))
+        local = Gtk.CheckButton(label='Save drafts and read markers on this device', active=self.preferences.data.get('local_state', False))
         secure = Gtk.CheckButton(label='Save session tokens in the system keyring', active=self.preferences.data.get('secure_session', False))
         secure.set_sensitive(self.keyring.available)
-        for toggle in (remember, notifications, secure):
+        for toggle in (remember, notifications, local, secure):
             child = toggle.get_child()
             if isinstance(child, Gtk.Label):
                 child.set_wrap(True); child.set_max_width_chars(40); child.set_xalign(0)
             root.append(toggle)
-        root.append(label('Drafts, messages, and read markers are not saved. Notification text omits message content. Tokens are saved only when keyring storage is enabled; no plaintext file fallback exists. A Secret Service provider must be installed and unlocked.', 'dim-label', True))
+        root.append(label('Local drafts/read markers are opt-in plaintext, scoped to server and user, capped at 1 MiB and 8 accounts. Message history is never saved. Disabling storage removes saved local state. Notification text omits message content. Tokens are saved only when keyring storage is enabled; no plaintext file fallback exists. A Secret Service provider must be installed and unlocked.', 'dim-label', True))
         error_label = label('', 'warning', True); root.append(error_label)
         def save():
             try:
-                self.preferences.save(theme=choices[theme.get_selected()], remember=remember.get_active(), notifications=notifications.get_active(), secure_session=secure.get_active(), url=self.session.url, name=self.session.name)
+                self.preferences.save(theme=choices[theme.get_selected()], remember=remember.get_active(), notifications=notifications.get_active(), secure_session=secure.get_active(), local_state=local.get_active(), url=self.session.url, name=self.session.name)
             except OSError:
                 error_label.set_text('Could not save preferences. Check the configuration-directory permissions.'); return
+            if local.get_active(): self.persist_state()
+            else:
+                if self.state_timer: GLib.source_remove(self.state_timer); self.state_timer = 0
+                self.state_writer.submit(reset=True)
             self.apply_theme(); self.save_secure_session(); win.close()
         from .app import box
         footer = box(spacing=8); footer.set_halign(Gtk.Align.END); footer.add_css_class('dialog-actions')
@@ -309,6 +314,21 @@ class DailyActions:
         footer.append(button('Save preferences', save, 'suggested-action'))
         if self.keyring.available and self.session.url:
             root.append(button('Forget saved session for this server', lambda: (secure.set_active(False), self.forget_secure_session(self.session.url, lambda value, error: error_label.set_text(error or 'Stored session removed. Current connection remains open.')))))
+        def reset():
+            confirm, content = self.dialog('Reset local drafts and read markers')
+            content.append(label('Remove all saved drafts/read markers for every server and clear current drafts/read markers? Server messages, preferences, and keyring tokens are kept.', None, True))
+            problem = label('', 'warning', True); content.append(problem)
+            def confirmed():
+                try:
+                    self.reset_local_state(); local.set_active(False)
+                    error_label.set_text('Drafts cleared; saved-data removal queued. Storage is off.')
+                    confirm.close()
+                except OSError: problem.set_text('Could not change storage settings. Check directory permissions.')
+            actions = box(spacing=8); actions.set_halign(Gtk.Align.END); actions.add_css_class('dialog-actions')
+            actions.append(button('Cancel', confirm.close, 'flat'))
+            actions.append(button('Reset local data', confirmed, 'destructive-action'))
+            content.append(actions); confirm.present()
+        root.append(button('Reset local drafts and read markers…', reset))
         root.append(footer)
         win.present()
 

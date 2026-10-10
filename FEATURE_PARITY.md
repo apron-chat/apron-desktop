@@ -13,8 +13,8 @@ not every policy or browser edge case of the web implementation.
 | Passkey login/register, WebAuthn Signal API (`webauthn.ts`) | Missing | Browser WebAuthn cannot simply be called from GTK. Need a deliberate native authenticator or browser-mediated integration; no insecure emulation. |
 | Email sign-in/add-email, separate pending connection (behavior email) | Missing | Requires a cancellable two-stage auth UI and identity-switch tests. No email was sent in development. |
 | Stored sessions (`storage.ts`, behavior auth) | Partial | Opt-in asynchronous libsecret Secret Service adapter and saved-session button. No plaintext fallback. Actual keyring service unavailable in test environment; adapter tests only. |
-| Cached prior-session rooms/messages (behavior persisted view) | Missing | No durable chat cache, drafts, or read markers. Safe connection/theme preferences are persisted atomically instead. |
-| Bounded history; reconnect checkpoint recovery (`client.ts`) | Partial | 50-record pages and bounded RAM; reconnect refreshes latest window. No complete durable checkpoint replay. |
+| Cached prior-session rooms/messages (behavior persisted view) | Missing | No durable chat cache. Opt-in endpoint/user-scoped drafts and read markers, atomic 0600 file, 1 MiB total, 8 accounts, reset/privacy controls. |
+| Bounded history; reconnect checkpoint recovery (`client.ts`) | Partial | 50-record pages; incremental row layout/reuse. Older-page snapshots are reconciled forward to a fixed horizon. Opened-room unread recovery from read cursors; 128-page scan budget, explicit incomplete/retention errors. No durable log checkpoint or offline chat cache. |
 | Core snapshots, edit/move/tombstones (`reducer.ts`) | Implemented | Greatest-log snapshots, embedded replies, moves, tombstones; memory-eviction limitations remain. |
 | Current users/roles; identity alias reconciliation (behavior identity) | Partial | Complete/partial current-user updates, profiles; alias reconciliation and full role/status UI missing. |
 | Rooms/threads; joined and browsable rooms (behavior room navigation) | Implemented | Searchable native sidebar, join action, parent shortcut, room/thread dialogs. |
@@ -24,7 +24,7 @@ not every policy or browser edge case of the web implementation.
 | Member list/add/remove (behavior members) | Implemented | Native room-details list, copy ID, exact-ID invitation, confirmed removal. Server remains permission authority. Truncated lists show counts. |
 | Membership-log replay (`reducer.ts`) | Partial | Current member state replays by log ID. Timeline join/leave event grouping is not implemented. |
 | Thread feed cards/summary positioning (behavior threads) | Partial | Threads in sidebar and summary in header; no interleaved thread cards or message-count previews. |
-| Send/reply/per-room drafts (behavior composer) | Implemented | Native TextView, Ctrl+Enter, reply strip; drafts in RAM only. |
+| Send/reply/per-room drafts (behavior composer) | Implemented | Native TextView, Ctrl+Enter, reply strip; drafts in RAM by default, optionally persisted with replies/mentions per endpoint and user. |
 | Replying to an unjoined room/thread joins first (behavior threads) | Implemented | Join confirmation precedes sending; a failed join retains the draft and sends nothing. |
 | Mentions/member suggestions (behavior composer) | Partial | Explicit member picker writes mentions; no inline chip/autocomplete editor. |
 | Message edit/delete (behavior message actions) | Implemented | Native dialogs, confirmation, preserve client fields, reject stale local snapshot. Own-message UI only; no moderation actions. |
@@ -37,7 +37,7 @@ not every policy or browser edge case of the web implementation.
 | Typing activity (behavior activity) | Missing | Requires throttled composer events and expiring per-room indicators. |
 | Profile name/status (`ProfileBar`, `ProfileCard`) | Partial | Native profile/name and advertised status picker. Avatar upload, account linking, richer member status indicators missing. |
 | Presence idle/mute/DND/preferences (behavior status) | Partial | Own status can be set. No idle reporting, timed mutes, or notification policy matrix yet. |
-| Unread/mentions/read markers (`UnreadTracker`, behavior unread) | Partial | New live creations, focus/bottom read, own cursors; no missed-history recovery or edit-added mention alerts. |
+| Unread/mentions/read markers (`UnreadTracker`, behavior unread) | Partial | Live creations, focus/bottom read, own cursors; optional durable cursors and bounded missed-history recovery for opened rooms. No all-room background recovery or edit-added mention alerts. |
 | Desktop/page notifications (`notifications.ts`) | Partial | Opt-in Gio.Notification mentions while inactive, content-free body and room activation. Real desktop notification daemon not available for delivery testing. |
 | Web push/service worker (behavior push) | Intentionally different | Native OS notifications while running; background push/closed-app wake not implemented. Need a Linux service design, not a browser service worker copy. |
 | Uploads, media, file preview/download (behavior embeds) | Missing | Safe inert text fallbacks only. Native file chooser/portal, bounded transfer, provenance policy still needed. |
@@ -50,16 +50,18 @@ not every policy or browser edge case of the web implementation.
 
 ## Current milestone and next work
 
-The daily-chat milestone adds discoverable controls and focuses on correct
-interrupted/repeated interactions. Focused official-server and native-widget
-tests are in `tests/reference_interop.py` and `tests/ui_daily_smoke.py`.
+This milestone adds incremental timeline rendering, row reuse/scroll anchors,
+opt-in local draft/read persistence and fixed-horizon historical reconciliation.
+See `tests/ui_recovery_smoke.py`, `tests/test_recovery.py`, and the official-server
+archived edit/delete/move test in `tests/reference_interop.py`.
 
 Before claiming equivalent daily use, next priorities are:
 
-1. Virtualized/incremental timeline layout and robust complete history recovery.
+1. True viewport virtualization and smoother worst-case frames; larger-history
+   resumable recovery beyond the explicit scan budget.
 2. Actual Secret Service integration test, then email auth and a defensible
-   native passkey path; account-scoped persisted cache/read state with privacy controls.
-3. Typing/idle/mute, unread recovery, richer navigation and member status.
+   native passkey path; a separate design for an encrypted/offline message cache.
+3. Typing/idle/mute, all-room unread recovery and edit-added mentions, richer navigation and member status.
 4. Bounded native upload/download/media handling and command/scoped-notice UI.
 5. Multi-message workflows, full emoji discovery, and remaining polish.
 

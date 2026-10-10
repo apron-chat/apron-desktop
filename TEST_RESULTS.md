@@ -1,4 +1,4 @@
-# Verification — 2026-10-09, native design pass
+# Verification — 2026-10-10, incremental history and local state
 
 All network testing used synthetic data on dedicated loopback listeners. No
 production service, real credential, bot process/state, or real chat content
@@ -7,10 +7,10 @@ on its own `feat/native-wayland` branch. No push, merge, or deployment occurred.
 
 ## Actual checks
 
-- **25 unit/fixture tests passed** (`test_*.py`): 21 pure state/action/rendering/
-  preferences/keyring-adapter tests and 4 actual libsoup WebSocket integration
+- **36 unit/fixture tests passed** (`test_*.py`): 30 pure state/action/rendering/
+  preferences/keyring/local-state/recovery tests and 6 actual libsoup WebSocket integration
   tests against the fictional Python fixture at `127.0.0.1:18765`.
-- **2 official Go reference integration tests passed**, separately from the
+- **3 official Go reference integration tests passed**, separately from the
   fixture tests. Built unchanged checkout
   `067083815be6b113e7d35f6569fa35dee0052fd5` with Go 1.27.1. Server identifies
   as `apron-go/8`; it ran at `127.0.0.1:18766/ws` with `--store memory`, a
@@ -28,6 +28,13 @@ on its own `feat/native-wayland` branch. No push, merge, or deployment occurred.
   incoming snapshot while a contextual menu is open, older/latest shortcuts,
   profile/preferences forms, empty/loading states, disabled disconnected actions,
   retained unsent draft, and capability refresh after reconnect.
+- **Native lifecycle/recovery flow passed**: unchanged row identity and scroll
+  anchor preservation, cancelling bottom-follow when scrolling during an incremental
+  fill, rapid room switches during load, 50-row/cache bounds, interrupted reconnect,
+  fresh-window restoration of a synthetic draft/reply/mentions, actual Preferences
+  reset confirmation, disk deletion, and no rewrite on close.
+- **Archived-page official-server reconciliation passed** with the cache cleared:
+  later edits, deletes and moves replace original snapshots before display.
 - Python syntax compilation, `git diff --check`, and wheel build passed.
   Actual GTK screenshots were visually inspected at desktop and compact sizes,
   including dark theme, focus disclosure, forms and empty state. Captures are
@@ -71,6 +78,7 @@ See README for installing dependencies and starting the fixture. Then:
 python -m unittest discover -s tests -p 'test_*.py' -v
 GDK_BACKEND=wayland python tests/ui_smoke.py /tmp/apron-preview.png
 GDK_BACKEND=wayland python tests/design_smoke.py /tmp/apron-design
+GDK_BACKEND=wayland python tests/ui_recovery_smoke.py
 
 # With the isolated official Go server above running:
 python tests/reference_interop.py
@@ -91,7 +99,61 @@ separate 1280×900 and 640×900 outputs. Client rendering used `GSK_RENDERER=cai
 Versions: Python 3.13, GTK 4.18.6, libadwaita 1.7.6, libsoup 3.6.5,
 Weston 14.0.2, markdown-it-py 3.0.0, websockets 15.0.1.
 
-## Actual efficiency measurement
+## Current responsiveness measurement
+
+The same 1,000-message, 1,045-byte-text synthetic benchmark room was used for
+both the visual-design baseline and incremental rendering. Both use native GTK,
+headless Weston/pixman and Cairo. No production traffic or content was used.
+
+| Measurement | After design, before incremental | Current incremental + reconciliation |
+|---|---:|---:|
+| Latest benchmark page, complete | 518.6 ms | 881.8 ms |
+| Ten older pages, min / median / max | 482.5 / 501.6 / 543.8 ms | 825.2 / 926.5 / 1320.6 ms |
+| Worst 10-ms heartbeat interval | 501.5 ms | 151.1 ms |
+| Idle wall / process CPU | 10.241 s / 0.0061 s | 9.885 s / 0.0071 s |
+| Idle percentage of one core | 0.060% | 0.072% |
+| Client RSS | 77.7 MiB | 78.5 MiB |
+| Rendered messages | 50 | 50 |
+| Cached messages / serialized bytes | 549 / 671,427 | 583 / 678,227 |
+
+Worst observed load-time gap fell about **70%** in the final run. An earlier
+incremental run observed 67.1 ms; the final run above is deliberately the reported
+result. Full-page completion is slower: the client yields between batches and
+older pages now include forward reconciliation traffic. This reduces long
+blocking turns but does not establish a 16-ms frame budget. True viewport
+virtualization remains useful, especially for large or complex individual rows.
+
+The benchmark now waits for all rendering batches, and initializes its heartbeat
+clock when the timer is installed, avoiding counting prior startup as a load
+stall. An intermediate run exposed that measurement bug after startup contained
+more synthetic general-room messages. The original design baseline's maximum
+was a page-load stall, greater than its entire 117-ms startup. General-room test
+data grew between runs, so startup and total cached message counts are not direct
+comparisons; the benchmark room stayed unchanged. Local-state storage was off
+for these performance samples. These are single warm shared-workspace runs,
+not isolated repeated statistical samples, actual niri hardware, or a soak test.
+
+Raw evidence: `docs/benchmark-design.json`, `docs/benchmark-incremental.json`.
+The prior daily-chat baseline below is retained for comparison across the visual
+pass; its 548-ms stall was measured before the design changes.
+
+## New state/recovery coverage
+
+Tests cover endpoint/user isolation, fresh disk restore, file mode 0600,
+1-MiB/8-account/256-room bounds, oversized/corrupt input, allowlisting, coalesced
+writes across accounts, reset ordering, and draft restoration before an async
+write finishes. Reset tests use a temporary directory and fictional text only.
+Normal-close flush and file/directory fsync are implemented; abrupt power loss
+and simultaneous independent application instances were not tested.
+
+Forward-scan tests cover inclusive continuation, a fixed horizon as the server
+advances, edits/deletes/moves, retention invalidating a selected page, missing
+progress, scan budget exhaustion, cancellation, and newer live snapshots winning.
+Real libsoup tests recover missed unread/mentions from already cached snapshots,
+verify idempotent counts, and discard cancelled room results. Recovery is limited
+to opened rooms and 128 sequential requests; incomplete recovery is reported.
+
+## Previous daily-chat efficiency measurement
 
 These measurements used the expanded daily-chat UI **before the design pass**
 and the official Go server. Performance has not been remeasured after the

@@ -7,7 +7,8 @@ import gi
 
 gi.require_version('Soup', '3.0')
 from gi.repository import Soup, Gio, GLib
-from .model import Store, MAX_FRAME, PAGE_SIZE, safe_text, validate_url
+from .model import Store, MAX_FRAME, PAGE_SIZE, safe_text, validate_url, number
+from .recovery import scan, reconcile_page
 
 
 class Session:
@@ -35,6 +36,7 @@ class Session:
         self.on_ready = lambda: None
         self.on_token = lambda: None
         self.on_message = lambda msg: None
+        self.on_read = lambda: None
 
     @property
     def caps(self):
@@ -245,6 +247,7 @@ class Session:
         elif method == 'activity' and p.get('from', {}).get('user_id') == self.store.you.get('user_id'):
             if p.get('read_message_id'):
                 self.store.mark_read(p.get('room_id', ''), p['read_message_id'])
+                self.on_read()
         self.emit()
 
     def _ping(self):
@@ -295,23 +298,52 @@ class Session:
             self.emit()
         self.request('room_list', params, done)
 
-    def history(self, rid, before=None, callback=lambda *_: None):
+    def history(self, rid, before=None, callback=lambda *_: None, valid=lambda: True, recover=False):
         params = {'limit': PAGE_SIZE}
         if rid:
             params['room_id'] = rid
         if before is not None:
             params['before'] = before
-        def done(result, error):
+        def finish(result, error):
+            if not valid(): return
             cursor = None
             if not error:
-                try:
-                    cursor = self.store.history(rid, result)
+                try: cursor = self.store.history(rid, result)
                 except (ValueError, TypeError, KeyError, AttributeError):
                     error = {'code': -1, 'message': 'Invalid history response.'}
-                    self.error = error['message']
+            if error:
+                self.error = error['message']
+                if 'retention' in self.error.lower(): self.store.discard_room_history(rid)
             callback(result, error, cursor)
             self.emit()
-        self.request('history', params, done)
+        def received(result, error):
+            if not valid(): return
+            if error: finish(result, error); return
+            if before is not None:
+                reconcile_page(self, rid, result, finish, valid)
+            elif recover and rid in self.store.reads:
+                try:
+                    horizon = number(result['latest_log_id'])
+                    lower = number(result['history_log_id']) if result.get('history_log_id') is not None else horizon + 1
+                    start = self.store.reads[rid] + 1
+                    if lower > start:
+                        self.error = 'Some unread history has expired. Counts cover available history only.'
+                        start = lower
+                except (ValueError, KeyError, TypeError):
+                    finish(None, {'code': -1, 'message': 'Invalid recovery bounds.'}); return
+                def apply(page):
+                    self.store.listing(page)
+                    for msg in page.get('messages', []):
+                        self.store.message(msg)
+                        current = self.store.messages.get(msg['message_id'], msg)
+                        if current['room_id'] == rid: self.store.note_unread(current)
+                    for record in page.get('reactions', []): self.store.reaction(record)
+                def recovered(error):
+                    if error: self.error = 'Unread recovery incomplete. ' + error['message']
+                    finish(result, None)  # latest page itself is still valid
+                scan(self, rid, start, horizon, apply, recovered, valid)
+            else: finish(result, None)
+        self.request('history', params, received)
 
     def send(self, rid, text, reply=None, mentions=None, callback=lambda *_: None):
         params = {'body': {'text': text, 'format': 'plain', 'mentions': mentions or []}}

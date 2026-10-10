@@ -20,7 +20,7 @@ class Preferences:
     @staticmethod
     def clean(data):
         if not isinstance(data, dict): return {}
-        out = {k: data[k] for k in ('remember', 'notifications', 'secure_session') if isinstance(data.get(k), bool)}
+        out = {k: data[k] for k in ('remember', 'notifications', 'secure_session', 'local_state') if isinstance(data.get(k), bool)}
         if data.get('theme') in ('system','light','dark'): out['theme'] = data['theme']
         if out.get('remember'):
             try: out['url'] = validate_url(data.get('url', ''))

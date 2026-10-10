@@ -11,6 +11,7 @@ from .model import PAGE_SIZE, safe_text, number
 from .session import Session
 from .render import markdown, embed_text
 from .preferences import Preferences
+from .local_state import LocalState, StateWriter, account_key, clean_account
 from .keyring import Keyring
 from .ui_actions import DailyActions
 
@@ -60,7 +61,13 @@ class Window(DailyActions, Adw.ApplicationWindow):
     def __init__(self, app, options):
         super().__init__(application=app, title='Apron', default_width=1120, default_height=800)
         self.options = options
+        self.closing = False
         self.preferences = Preferences()
+        self.local_state = LocalState(self.preferences.path.parent)
+        self.state_writer = StateWriter(self.local_state, lambda: GLib.idle_add(self.state_failed))
+        self.state_key = None
+        self.state_store = None
+        self.state_timer = 0
         self.keyring = Keyring()
         self.apply_theme()
         self.reaction_pending = set()
@@ -70,6 +77,7 @@ class Window(DailyActions, Adw.ApplicationWindow):
         self.session.on_ready = self.ready
         self.session.on_token = self.save_secure_session
         self.session.on_message = self.incoming
+        self.session.on_read = self.schedule_state
         self.room_id = ''
         self.cursor = None
         self.page_ids = None
@@ -82,6 +90,12 @@ class Window(DailyActions, Adw.ApplicationWindow):
         self.sending = False
         self.render_pending = False
         self.message_menu_open = False
+        self.rendering = False
+        self.row_timer = 0
+        self.row_cache = {}
+        self.render_room = None
+        self.render_follow = False
+        self.render_anchor = None
         self.list_signature = self.message_signature = None
         self.focus_bottom = True
         self.build()
@@ -196,6 +210,12 @@ class Window(DailyActions, Adw.ApplicationWindow):
         clamp.set_child(timeline)
         self.scroll = Gtk.ScrolledWindow(vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER)
         self.scroll.set_child(clamp)
+        wheel = Gtk.EventControllerScroll(flags=Gtk.EventControllerScrollFlags.VERTICAL)
+        wheel.connect('scroll', lambda *_: self.stop_following())
+        self.scroll.add_controller(wheel)
+        scroll_keys = Gtk.EventControllerKey()
+        scroll_keys.connect('key-pressed', lambda controller, key, *rest: self.stop_following() if key in (Gdk.KEY_Up, Gdk.KEY_Down, Gdk.KEY_Page_Up, Gdk.KEY_Page_Down, Gdk.KEY_Home, Gdk.KEY_End) else False)
+        self.scroll.add_controller(scroll_keys)
         self.scroll.get_vadjustment().connect('value-changed', self.scrolled)
         content.append(self.scroll)
         composer_outer = box(True, 8, 20)
@@ -219,7 +239,7 @@ class Window(DailyActions, Adw.ApplicationWindow):
         self.editor.set_accepts_tab(False)
         self.editor.set_size_request(-1, 44)
         self.editor.update_property([Gtk.AccessibleProperty.LABEL], ['Message composer'])
-        self.editor.get_buffer().connect('changed', lambda *_: self.update_send())
+        self.editor.get_buffer().connect('changed', lambda *_: (self.update_send(), self.schedule_state()))
         editor_scroll = Gtk.ScrolledWindow(min_content_height=44, max_content_height=150, propagate_natural_height=True)
         editor_scroll.set_child(self.editor)
         overlay = Gtk.Overlay()
@@ -279,13 +299,16 @@ class Window(DailyActions, Adw.ApplicationWindow):
         return False
 
     def queue_render(self):
+        if self.closing: return
         if not self.render_pending:
             self.render_pending = True
             GLib.idle_add(self.render)
 
     def render(self):
+        if self.closing: return False
         self.render_pending = False
         s = self.session
+        if not s.ready: self.loading = False
         self.status.set_text(('● ' if s.ready else '○ ') + s.state)
         self.account_avatar.set_text(safe_text(s.store.you.get('name') or s.store.you.get('user_id') or 'a')[:1].upper())
         self.identity.set_text(safe_text(s.store.you.get('name') or s.store.you.get('user_id') or 'Not signed in'))
@@ -351,31 +374,87 @@ class Window(DailyActions, Adw.ApplicationWindow):
         signature = repr((messages, self.session.store.users, self.session.store.reactions, self.session.ready, self.session.caps, self.room_id, self.loading if not messages else False))
         if signature == self.message_signature:
             return
-        focused = self.get_focus()
+        if self.row_timer:
+            GLib.source_remove(self.row_timer); self.row_timer = 0
+        self.rendering = True
+        self.message_signature = signature
+        same_room = self.render_room == self.room_id
+        self.render_room = self.room_id
+        was_bottom = self.focus_bottom and not self.older
         focused_message = None
+        focused = self.get_focus()
         while focused is not None:
             if hasattr(focused, 'apron_message_id'):
                 focused_message = focused.apron_message_id; break
             focused = focused.get_parent()
-        self.message_signature = signature
-        was_bottom = self.focus_bottom
-        clear(self.messages)
+        anchor = None
+        if same_room and not was_bottom:
+            for mid, (_, row) in self.row_cache.items():
+                ok, bounds = row.compute_bounds(self.scroll)
+                if ok and bounds.get_y() + bounds.get_height() > 0:
+                    anchor = (mid, bounds.get_y()); break
+        self.render_follow = was_bottom
+        self.render_anchor = anchor
+        desired = []
+        for msg in messages:
+            uid = msg.get('from', {}).get('user_id')
+            reply = msg.get('reply_to', {}).get('message_id')
+            key = repr((msg, self.session.store.users.get(uid), self.session.store.messages.get(reply),
+                        self.session.store.reaction_counts(msg['message_id']), self.session.ready, self.session.caps))
+            desired.append((msg, key))
+        desired_keys = {m['message_id']: key for m, key in desired}
+        for mid, (key, row) in list(self.row_cache.items()):
+            if not same_room or desired_keys.get(mid) != key:
+                self.messages.remove(row); del self.row_cache[mid]
+        child = self.messages.get_first_child()
+        while child:
+            following = child.get_next_sibling()
+            if not hasattr(child, 'apron_message_id'): self.messages.remove(child)
+            child = following
         if not messages:
             status = Adw.StatusPage(title='Loading conversation…' if self.loading else 'Start a conversation' if self.session.ready else 'Welcome to Apron',
                                     description='Fetching recent messages…' if self.loading else 'Connect to your server to find your people.' if not self.session.ready else 'Nothing here yet. Say hello when you’re ready.',
                                     icon_name='chat-message-new-symbolic')
-            status.add_css_class('empty-state')
-            self.messages.append(status)
-        else:
-            note = label(('OLDER MESSAGES' if self.older else 'LATEST MESSAGES') + f'  ·  {len(messages)} shown', 'section-label')
-            self.messages.append(note)
-            for msg in messages:
-                row = self.message_widget(msg)
-                self.messages.append(row)
-                if msg['message_id'] == focused_message:
-                    GLib.idle_add(lambda row=row: (row.grab_focus() if row.get_root() is self and self.get_focus() is None else False, False)[1])
-        if was_bottom and not self.older:
-            GLib.idle_add(self.scroll_bottom)
+            status.add_css_class('empty-state'); self.messages.append(status)
+            self.rendering = False; return
+        note = label(('OLDER MESSAGES' if self.older else 'LATEST MESSAGES') + f'  ·  {len(messages)} shown', 'section-label')
+        self.messages.prepend(note)
+        position = 0
+        previous = note
+        def restore_scroll():
+            anchor = self.render_anchor
+            if self.render_follow: self.scroll_bottom()
+            elif anchor and anchor[0] in self.row_cache:
+                ok, bounds = self.row_cache[anchor[0]][1].compute_bounds(self.scroll)
+                if ok:
+                    adj = self.scroll.get_vadjustment()
+                    adj.set_value(adj.get_value() + bounds.get_y() - anchor[1])
+            return False
+        def batch():
+            nonlocal position, previous
+            # Limit new expensive Pango/GTK rows per frame, not just Python work.
+            created = 0
+            while position < len(desired) and created < 2:
+                msg, key = desired[position]; mid = msg['message_id']
+                if mid in self.row_cache:
+                    row = self.row_cache[mid][1]
+                    self.messages.reorder_child_after(row, previous)
+                else:
+                    row = self.message_widget(msg)
+                    self.messages.insert_child_after(row, previous)
+                    self.row_cache[mid] = (key, row); created += 1
+                    if mid == focused_message and self.get_focus() is None: row.grab_focus()
+                previous = row; position += 1
+            GLib.idle_add(restore_scroll)
+            if position < len(desired): return True
+            self.row_timer = 0
+            # Leave a frame for final layout before read markers/test completion.
+            def finish():
+                self.row_timer = 0; restore_scroll(); self.rendering = False
+                self.read_visible(); return False
+            self.row_timer = GLib.timeout_add(32, finish)
+            return False
+        self.row_timer = GLib.timeout_add(16, batch)
 
     def message_widget(self, msg):
         outer = box(spacing=12)
@@ -450,10 +529,53 @@ class Window(DailyActions, Adw.ApplicationWindow):
         outer.append(card)
         return outer
 
+    def state_failed(self):
+        self.session.error = 'Could not save local drafts/read markers. Check directory permissions.'
+        self.queue_render(); return False
+
+    def schedule_state(self):
+        if self.closing: return
+        if self.preferences.data.get('local_state') and self.state_key and not self.state_timer:
+            self.state_timer = GLib.timeout_add(750, self.persist_state)
+
+    def persist_state(self):
+        if self.state_timer: GLib.source_remove(self.state_timer); self.state_timer = 0
+        if self.preferences.data.get('local_state') and self.state_key and self.state_store:
+            if self.room_id:
+                self.drafts.pop(self.room_id, None)
+                self.drafts[self.room_id] = (self.text(), self.reply, self.mention_ids[:])
+            self.drafts = clean_account({'drafts': self.drafts})['drafts']
+            self.state_writer.submit(self.state_key, self.drafts, self.state_store.reads.copy())
+        return False
+
+    def reset_local_state(self):
+        if self.state_timer: GLib.source_remove(self.state_timer); self.state_timer = 0
+        self.preferences.save(local_state=False)
+        self.state_writer.submit(reset=True)
+        self.drafts.clear(); self.reply = None; self.mention_ids = []
+        self.editor.get_buffer().set_text('')
+        self.session.store.reads.clear(); self.session.store.unread.clear(); self.session.store.mentions.clear()
+        self.session.store.unread_ids.clear(); self.session.store.mention_ids.clear()
+        self.queue_render()
+
     def ready(self):
+        if self.state_key and self.room_id:
+            self.drafts[self.room_id] = (self.text(), self.reply, self.mention_ids[:])
+        key = account_key(self.session.url, self.session.store.you['user_id'])
+        if key != self.state_key:
+            self.persist_state()
+            self.state_key = key
+            restored = self.state_writer.restore(key) if self.preferences.data.get('local_state') else {'drafts': {}, 'reads': {}}
+            self.drafts = restored['drafts']; self.session.store.reads.update(restored['reads'])
+            self.reply = None; self.mention_ids = []
+            self.editor.get_buffer().set_text('')
+        self.state_store = self.session.store
         rooms = self.session.store.rooms
         if self.room_id not in rooms:
             self.room_id = next((rid for rid, r in rooms.items() if r.get('_joined') and not r.get('parent_room_id')), next(iter(rooms), ''))
+        draft, self.reply, self.mention_ids = self.drafts.get(self.room_id, ('', None, []))
+        self.editor.get_buffer().set_text(draft)
+        self.reply_label.set_text('Replying to message ' + (self.reply or ''))
         self.load_history(latest=True)
         self.queue_render()
 
@@ -483,6 +605,7 @@ class Window(DailyActions, Adw.ApplicationWindow):
         self.drafts[self.room_id] = (self.text(), self.reply, self.mention_ids[:])
         while len(self.drafts) > 256:
             self.drafts.pop(next(iter(self.drafts)))
+        self.persist_state()
         self.room_id = rid
         text, self.reply, self.mention_ids = self.drafts.get(rid, ('', None, []))
         self.editor.get_buffer().set_text(text)
@@ -502,7 +625,9 @@ class Window(DailyActions, Adw.ApplicationWindow):
             self.loading = False; self.cursor = None; self.older = False
             self.queue_render(); return
         self.loading = True
+        previous_older = self.older
         rid = self.room_id
+        session_generation = self.session.generation
         before = None if latest else self.cursor
         self.older = not latest
         if latest:
@@ -512,18 +637,23 @@ class Window(DailyActions, Adw.ApplicationWindow):
             if generation != self.load_generation:
                 return
             self.loading = False
+            if error: self.older = previous_older
             if not error:
                 self.cursor = cursor
                 if not latest:
                     self.page_ids = {m['message_id'] for m in result.get('messages', [])}
                     GLib.idle_add(lambda: self.scroll.get_vadjustment().set_value(0))
             self.queue_render()
-        self.session.history(rid, before, done)
+        self.session.history(rid, before, done, valid=lambda: generation == self.load_generation and session_generation == self.session.generation, recover=latest)
         self.queue_render()
 
     def load_older(self):
         if self.cursor is not None and not self.loading:
             self.load_history()
+
+    def stop_following(self):
+        self.render_follow = False; self.render_anchor = None
+        return False
 
     def scrolled(self, adjustment):
         self.focus_bottom = adjustment.get_value() >= adjustment.get_upper() - adjustment.get_page_size() - 30
@@ -537,7 +667,7 @@ class Window(DailyActions, Adw.ApplicationWindow):
         return False
 
     def read_visible(self):
-        if not self.is_active() or not self.focus_bottom or self.older or self.loading or not self.session.ready:
+        if self.rendering or not self.is_active() or not self.focus_bottom or self.older or self.loading or not self.session.ready:
             return
         messages = self.visible_messages()
         if messages:
@@ -549,6 +679,7 @@ class Window(DailyActions, Adw.ApplicationWindow):
                     self.get_application().withdraw_notification(self.notification_id(self.room_id))
                 if 'activity' in self.session.caps:
                     self.session.notify('activity', {'room_id': self.room_id, 'read_message_id': mid})
+                self.schedule_state()
                 self.queue_render()
 
     def update_send(self):
@@ -592,10 +723,12 @@ class Window(DailyActions, Adw.ApplicationWindow):
         self.reply = msg['message_id']
         self.reply_label.set_text('Replying to ' + safe_text(msg.get('from', {}).get('name') or msg.get('from', {}).get('user_id', ''), 100))
         self.reply_box.set_visible(True)
+        self.schedule_state()
         self.editor.grab_focus()
 
     def cancel_reply(self):
         self.reply = None
+        self.schedule_state()
         self.reply_box.set_visible(False)
 
     def dialog(self, title):
@@ -628,9 +761,11 @@ class Window(DailyActions, Adw.ApplicationWindow):
             actions.append(button('Disconnect', lambda: (self.session.disconnect(), win.close())))
         def connect():
             try:
+                self.persist_state()
                 self.session.connect(url.get_text().strip(), name.get_text().strip(), token.get_text())
             except ValueError as e:
                 error_label.set_text(str(e)); return
+            self.state_key = None; self.state_store = None
             self.drafts.clear(); self.reply = None; self.mention_ids = []
             self.editor.get_buffer().set_text('')
             self.room_id = ''; self.page_ids = None; self.cursor = None
@@ -704,6 +839,10 @@ class Window(DailyActions, Adw.ApplicationWindow):
         return False
 
     def close_requested(self, *_):
+        self.closing = True
+        self.persist_state()
+        self.state_writer.close()
+        if self.row_timer: GLib.source_remove(self.row_timer); self.row_timer = 0
         self.session.disconnect()
         return False
 

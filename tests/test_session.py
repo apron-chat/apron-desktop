@@ -47,6 +47,29 @@ class SessionTests(unittest.TestCase):
         self.wait(lambda: bool(created))
         self.assertEqual(s.store.rooms[created[0][0]['room_id']]['parent_room_id'], 'general')
 
+    def test_read_cursor_recovers_missed_mentions_and_is_idempotent(self):
+        self.connect();s=self.session
+        s.store.reads['general']=1791536401075
+        preloaded=[];s.history('general',callback=lambda *a:preloaded.append(a))
+        self.wait(lambda:bool(preloaded))  # cached historical snapshots must still recover unread
+        pages=[]
+        s.history('general',callback=lambda *a:pages.append(a),recover=True)
+        self.wait(lambda:len(pages)==1)
+        self.assertIsNone(pages[0][1])
+        self.assertEqual(s.store.unread['general'],4)
+        self.assertEqual(s.store.mentions['general'],1)
+        s.history('general',callback=lambda *a:pages.append(a),recover=True)
+        self.wait(lambda:len(pages)==2)
+        self.assertEqual(s.store.unread['general'],4)
+        self.assertEqual(s.store.mentions['general'],1)
+
+    def test_cancelled_room_load_does_not_apply_or_call_back(self):
+        self.connect();s=self.session;active=[True];answers=[]
+        s.history('native',callback=lambda *a:answers.append(a),valid=lambda:active[0])
+        active[0]=False
+        self.wait(lambda:not s.pending)
+        self.assertEqual(answers,[]);self.assertEqual(s.store.timeline('native'),[])
+
     def test_denied_token_stops_without_guest_fallback(self):
         s = self.session
         s.connect('ws://127.0.0.1:18765', token='deliberately-invalid-test-token')
