@@ -43,10 +43,11 @@ it needs no XWayland or compositor-specific plugin. `GDK_BACKEND=wayland` can
 force Wayland if troubleshooting backend selection. GTK follows the system's
 appearance and scaling settings.
 
-**Nix status:** the exact-revision flake is supplied but was not evaluated or
-built here because this environment has no Nix executable. The first Nix run
-can generate `flake.lock`; its nixpkgs input is already pinned. niri itself was
-not available for testing. Actual native UI verification used Weston/Wayland.
+**Nix status:** Nix 2.26.3 parsed the flake and passed `nix flake check
+--no-build --all-systems`, evaluating packages, apps and development shells for
+x86_64-linux and aarch64-linux. `flake.lock` records the pinned source hash.
+Validation used an isolated temporary store without system changes. Package
+builds and an actual niri launch remain unverified; native UI tests used Weston/Wayland.
 
 ## Run without Nix
 
@@ -142,13 +143,15 @@ until unmuted, or unmute. Server notifications determine the stored mute state.
 Global/parent-room mutes and Do Not Disturb suppress local mention notifications.
 These settings remain server-owned; there is no new background polling loop.
 
-With `embed:upload`, the composer attachment icon opens a native file chooser,
-then a confirmation with an optional caption. Join the room first. One file up
-to **8 MiB** is read, confirmed and posted as an upload embed; its returned
-single-use `write_url` receives an HTTP PUT. The existing composer draft is kept.
-The caption is a separate message; attaching to the current reply or sending
-multiple files together is not implemented. Failed/uncertain transfers are never
-automatically retried; check the message before posting another attachment.
+With `embed:upload`, the composer attachment icon opens a native multiple-file
+chooser, then a confirmation with an editable caption and optional current reply.
+Join the room first. Choose up to **four files, 8 MiB total**. The confirmation
+starts with the current draft and mentions; one message is posted, then each
+returned single-use `write_url` receives an HTTP PUT in request order. The
+unchanged composer clears only after the message is accepted; newer edits stay.
+A failed/cancelled upload stops the remaining batch and reports how many files
+completed. Text may already be posted even if an upload fails. Nothing is
+retried automatically; inspect the message before posting again.
 
 Received uploads show pending metadata or **Save attachment…**. Saving requires
 an explicit destination and downloads at most 8 MiB. Nothing is opened or
@@ -158,7 +161,7 @@ They use a separate HTTP session with no bearer token, cookies, referrer or
 redirect following. Cross-origin/CDN URLs are visibly unsupported even when
 legitimate; this conservative restriction is intentional. The transfer can be
 cancelled and has a two-minute operation timeout. There is no automatic media fetch, inline decoder, audio/video player,
-iframe/HTML renderer, stream viewer, attachment queue or upload resumption.
+iframe/HTML renderer, stream viewer, background attachment queue or upload resumption.
 The server may reject a file type/size below the client limit; errors stay visible.
 
 ## What works

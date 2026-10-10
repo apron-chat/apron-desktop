@@ -101,6 +101,7 @@ class StateWriter:
         self.pending = {}
         self.snapshots = {}
         self.reset_pending = False
+        self.reset_active = False
         self.future = None
 
     def submit(self, key=None, drafts=None, reads=None, reset=False):
@@ -119,7 +120,7 @@ class StateWriter:
         from copy import deepcopy
         with self.lock:
             if key in self.snapshots: return deepcopy(self.snapshots[key])
-            if self.reset_pending: return {'drafts': {}, 'reads': {}}
+            if self.reset_pending or self.reset_active: return {'drafts': {}, 'reads': {}}
         return self.state.restore(key)
 
     def _drain(self):
@@ -129,7 +130,7 @@ class StateWriter:
                     self.future = None
                     return
                 reset = self.reset_pending
-                if reset: self.reset_pending = False
+                if reset: self.reset_pending = False; self.reset_active = True
                 else: operation = self.pending.pop(next(iter(self.pending)))
             try:
                 if reset: self.state.reset()
@@ -137,6 +138,9 @@ class StateWriter:
                     key, data = operation
                     self.state.save(key, data['drafts'], data['reads'])
             except OSError: self.failed()
+            finally:
+                if reset:
+                    with self.lock: self.reset_active = False
 
     def close(self):
         self.executor.shutdown(wait=True)

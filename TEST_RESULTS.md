@@ -1,4 +1,4 @@
-# Verification — 2026-10-10, apron-gtk presence and attachments
+# Verification — 2026-10-10, apron-gtk readiness follow-up
 
 All network testing used synthetic data on dedicated loopback listeners. No
 production service, real credential, bot process/state, or real chat content
@@ -9,10 +9,10 @@ separately authorized; main and deployment remain outside this milestone.
 
 ## Actual checks
 
-- **44 unit/fixture tests passed** (`test_*.py`): 35 state/action/rendering/
+- **46 unit/fixture tests passed** (`test_*.py`): 36 state/action/rendering/
   preferences/keyring/local-state/recovery/presence/naming tests, 6 libsoup WebSocket
   integration tests against the fictional fixture at `127.0.0.1:18765`, and
-  3 media tests including a synthetic loopback HTTP server.
+  4 media tests including a synthetic loopback HTTP server.
 - **4 official Go reference integration tests passed**, separately from the
   fixture tests. Built unchanged checkout
   `067083815be6b113e7d35f6569fa35dee0052fd5` with Go 1.27.1. Server identifies
@@ -46,14 +46,25 @@ separately authorized; main and deployment remain outside this milestone.
   that connection, as the inspected web client does.
 - **Native presence/media flow passed**: new app ID, real composer user-action
   signal, typing row, mute dialog, muted notification suppression, native upload
-  confirmation, repeated-submit guard, explicit save, retained composer draft,
-  and stale attachment refusal. File chooser callbacks were supplied synthetic
+  confirmation with two-file reply, repeated-submit guard, byte-identical explicit
+  save, composer clearing after acceptance and preservation of newer edits,
+  partial failure stopping a three-file batch, and stale attachment refusal. File chooser callbacks were supplied synthetic
   local paths deterministically; native dialogs, Gio file IO, protocol post and
   HTTP transfers were real. Interactive file chooser/portal selection itself
   was not automated.
 - HTTP safety tests verify absent Authorization/Cookie/Referer, blocked redirects
   and cross-origin URLs, bounded unknown-length bodies, cancellation and local
   file reads. All data and file paths were synthetic.
+- Final follow-up reran all 46 unit/fixture tests, all four Go integration tests,
+  and the native presence/media, daily-action and persistence/recovery flows.
+  The new attachment confirmation screenshot was visually inspected
+  (`docs/attachments-confirm.png`). Prior desktop/compact design captures remain applicable; design/performance
+  suites were not rerun for this bounded follow-up.
+- **Nix 2.26.3 validation passed**: parse, x86_64 package derivation evaluation,
+  then `nix flake check --no-build --all-systems` for both supported architectures
+  (packages, apps and dev shells). Generated `flake.lock`. Nix and its store
+  lived under `/tmp`; no daemon, system install or security setting changed.
+  No Nix package build or niri launch was performed. See `docs/nix-check.txt` and `docs/readiness-ui.txt`.
 - Python syntax compilation, `git diff --check`, and wheel build passed.
   Actual GTK screenshots were visually inspected at desktop and compact sizes,
   including dark theme, focus disclosure, forms and empty state. Captures are
@@ -163,7 +174,8 @@ pass; its 548-ms stall was measured before the design changes.
 Tests cover endpoint/user isolation, fresh disk restore, file mode 0600,
 1-MiB/8-account/256-room bounds, oversized/corrupt input, allowlisting, coalesced
 writes across accounts, reset ordering, and draft restoration before an async
-write finishes. Reset tests use a temporary directory and fictional text only.
+write finishes. A blocked-delete regression also verifies that restore cannot
+resurrect disk drafts while a reset is active. Reset tests use a temporary directory and fictional text only.
 Normal-close flush and file/directory fsync are implemented; abrupt power loss
 and simultaneous independent application instances were not tested.
 
@@ -212,7 +224,9 @@ against Rust, apron-web, GPU rendering, or actual niri hardware.
 
 ## Not run / remaining validation
 
-- Nix flake evaluation/build and actual niri launch (tools unavailable).
+- Nix package build and actual niri launch. Evaluation passed; the workspace has
+  no normal `/nix/store` installation, and niri is unavailable. Full build/runtime
+  validation belongs on a NixOS host or dedicated Nix builder.
 - Full protocol conformance, comprehensive arbitrary-history recovery, aliases,
   real TLS endpoints, actual Secret Service operation, actual OS notifications,
   interactive file chooser/portal selection, inline media playback,

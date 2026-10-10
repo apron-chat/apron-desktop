@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from http.server import ThreadingHTTPServer,BaseHTTPRequestHandler
 from gi.repository import GLib,Gio
-from apron_gtk.media import Transfers,transfer_url,file_title,MAX_TRANSFER
+from apron_gtk.media import Transfers,transfer_url,file_title,MAX_TRANSFER,validate_attachments
 
 class Handler(BaseHTTPRequestHandler):
     seen=[]
@@ -44,6 +44,11 @@ class MediaTests(unittest.TestCase):
             with self.assertRaises(ValueError):transfer_url(url,'wss://chat.invalid/ws')
         self.assertEqual(transfer_url('https://chat.invalid/a?opaque=x','wss://chat.invalid/ws'),'https://chat.invalid/a?opaque=x')
         self.assertEqual(file_title('../x\u202e.txt'),'x.txt')
+    def test_attachment_batch_limits(self):
+        self.assertEqual(len(validate_attachments([('a',b'a'),('b',b'b')])),2)
+        for files in [[], [('a',b'x')]*5, [('a',b'x'*MAX_TRANSFER),('b',b'x')]]:
+            with self.assertRaises(ValueError):validate_attachments(files)
+
     def test_get_put_have_no_auth_cookies_or_redirects(self):
         t=Transfers()
         for method in ['GET','PUT']:

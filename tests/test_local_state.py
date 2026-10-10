@@ -49,3 +49,16 @@ class LocalStateTests(unittest.TestCase):
             w.close()
             self.assertEqual(len(s.load()),8)
             self.assertEqual(s.restore('0'.zfill(64))['drafts']['r'][0],'latest')
+
+    def test_restore_during_active_reset_cannot_read_old_disk_state(self):
+        import threading
+        with tempfile.TemporaryDirectory() as directory:
+            s=LocalState(directory);s.save('a'*64,{'r':('old',None,[])},{})
+            entered=threading.Event();release=threading.Event();original=s.reset
+            def reset():
+                entered.set();release.wait(3);original()
+            s.reset=reset;w=StateWriter(s);w.submit(reset=True)
+            try:
+                self.assertTrue(entered.wait(3))
+                self.assertEqual(w.restore('a'*64),{'drafts':{},'reads':{}})
+            finally:release.set();w.close()

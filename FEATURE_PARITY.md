@@ -40,7 +40,7 @@ not every policy or browser edge case of the web implementation.
 | Unread/mentions/read markers (`UnreadTracker`, behavior unread) | Partial | Live creations, focus/bottom read, own cursors; optional durable cursors and bounded missed-history recovery for opened rooms. No all-room background recovery or edit-added mention alerts. |
 | Desktop/page notifications (`notifications.ts`) | Partial | Opt-in Gio.Notification mentions while inactive, content-free body and room activation. Real desktop notification daemon not available for delivery testing. |
 | Web push/service worker (behavior push) | Intentionally different | Native OS notifications while running; background push/closed-app wake not implemented. Need a Linux service design, not a browser service worker copy. |
-| Uploads, media, file preview/download (behavior embeds) | Partial | Native upload confirmation and explicit Save via file chooser; real single-use protocol PUT and GET, 8 MiB bounds, cancellation, no forwarded credentials or redirects. Same-origin only. No inline image/audio/video viewer, multiple-file composer, drag/drop or resume. |
+| Uploads, media, file preview/download (behavior embeds) | Partial | Native upload confirmation and explicit Save via file chooser; up to four files/8 MiB total in one message, caption/mentions/current reply, sequential single-use PUT and bounded GET, cancellation and partial-failure reporting. No forwarded credentials or redirects; same-origin only. No inline image/audio/video viewer, drag/drop or resume. |
 | Streaming/OpenGraph/trusted media (behavior embeds) | Missing | Only explicit same-origin upload-file transfers. OpenGraph media, streams and executable embeds stay inert; third-party origins are unsupported. |
 | Markdown/code/tables (behavior formatting) | Partial | CommonMark → restricted Pango; common formatting, inert links/media. Rich tables and interactive links absent. |
 | Commands (`commands.ts`, behavior commands) | Missing | Slash text remains ordinary text. Need capability-aware command controls and scoped notices. |
@@ -54,6 +54,8 @@ This milestone names the client **apron-gtk** and adds typing/idle reporting,
 server-owned mutes and explicit bounded attachment transfers. Reviewed the same
 actual source snapshot, including `client.ts` sendTyping/setIdle/sendFiles,
 `notify-scopes.ts`, attachment tests and protocol §§4.5, 4.6 and 4.8.
+A final readiness follow-up adds bounded multiple attachments with replies, fixes
+a local-state reset/restore race, and supplies an evaluated Nix lock file.
 `tests/ui_presence_media.py` exercises the native controls with the official
 loopback server. `tests/test_naming.py` covers legacy local-state compatibility.
 
@@ -64,7 +66,7 @@ Before claiming equivalent daily use, next priorities are:
 2. Actual Secret Service integration test, then email auth and a defensible
    native passkey path; a separate design for an encrypted/offline message cache.
 3. All-room unread recovery and edit-added mentions, richer navigation and member status.
-4. Inline media viewing, multi-attachment/reply composition, broader origin policy,
+4. Inline media viewing, broader origin policy,
    and command/scoped-notice UI.
 5. Multi-message workflows, full emoji discovery, and remaining polish.
 

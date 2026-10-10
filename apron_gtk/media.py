@@ -6,6 +6,7 @@ from gi.repository import Soup, Gio, GLib
 from .model import safe_text, validate_url
 
 MAX_TRANSFER = 8 * 1024 * 1024
+MAX_ATTACHMENTS = 4
 
 
 def transfer_url(url, server):
@@ -24,6 +25,14 @@ def transfer_url(url, server):
 def file_title(name):
     name = name if isinstance(name,str) else 'attachment'
     return safe_text(name.replace('\\','/').split('/')[-1],180) or 'attachment'
+
+
+def validate_attachments(files):
+    if not 1 <= len(files) <= MAX_ATTACHMENTS:
+        raise ValueError('Choose between one and four attachments.')
+    if any(not isinstance(data, bytes) for _,data in files) or sum(len(data) for _,data in files)>MAX_TRANSFER:
+        raise ValueError('Attachments must total no more than 8 MiB.')
+    return [(file_title(title),data) for title,data in files]
 
 
 class Transfers:
@@ -131,64 +140,131 @@ class MediaActions:
         if self.picking_file or self.attachment_dialog or self.transfers.active:return
         if not self.session.ready or 'embed:upload' not in self.session.caps:return
         self.picking_file=True;generation=self.session.generation;rid=self.room_id
-        chooser=Gtk.FileDialog(title='Attach a file · maximum 8 MiB')
+        chooser=Gtk.FileDialog(title='Attach up to four files · 8 MiB total')
         def chosen(dialog,result):
-            self.picking_file=False
-            try:file=dialog.open_finish(result)
-            except GLib.Error:return
-            if self.closing or generation!=self.session.generation or rid!=self.room_id:return
-            def loaded(data,error):
-                if self.closing:return
-                self.transfer_state(error or '')
-                if not error and generation==self.session.generation and rid==self.room_id:
-                    self.confirm_attachment(file_title(file.get_basename()),data,rid,generation)
-            try:self.transfers.read_file(file,loaded);self.transfer_state('Reading selected file…')
-            except ValueError as error:self.transfer_state(str(error))
-        chooser.open(self,None,chosen)
+            try:selected=dialog.open_multiple_finish(result)
+            except GLib.Error:self.picking_file=False;return
+            if self.closing or generation!=self.session.generation or rid!=self.room_id:
+                self.picking_file=False;return
+            if not 1<=selected.get_n_items()<=MAX_ATTACHMENTS:
+                self.picking_file=False;self.transfer_state('Choose between one and four files.');return
+            files=[]
+            def next_file(index=0):
+                if self.closing or generation!=self.session.generation or rid!=self.room_id:
+                    self.picking_file=False;files.clear();return
+                if index==selected.get_n_items():
+                    self.picking_file=False;self.transfer_state('')
+                    self.confirm_attachments(files,rid,generation);return
+                file=selected.get_item(index)
+                def loaded(data,error):
+                    if self.closing:
+                        self.picking_file=False;files.clear();return
+                    if error:
+                        self.picking_file=False;files.clear()
+                        if not self.closing:self.transfer_state(error)
+                        return
+                    files.append((file_title(file.get_basename()),data))
+                    if sum(len(value) for _,value in files)>MAX_TRANSFER:
+                        self.picking_file=False;files.clear();self.transfer_state('Attachments must total no more than 8 MiB.');return
+                    next_file(index+1)
+                try:
+                    self.transfers.read_file(file,loaded)
+                    self.transfer_state(f'Reading file {index+1} of {selected.get_n_items()}…')
+                except ValueError as error:
+                    self.picking_file=False;files.clear();self.transfer_state(str(error))
+            next_file()
+        chooser.open_multiple(self,None,chosen)
 
     def confirm_attachment(self,title,data,rid,generation):
+        return self.confirm_attachments([(title,data)],rid,generation)
+
+    def confirm_attachments(self,files,rid,generation):
         from .app import Gtk, label, button, box
         if self.attachment_dialog:return
-        win,root=self.dialog('Send attachment');self.attachment_dialog=win
-        dismissed=[False]
+        files=validate_attachments(files)
+        original=(self.text(),self.reply,self.mention_ids[:])
+        win,root=self.dialog('Send attachments');self.attachment_dialog=win
+        dismissed=[False];pending=[False]
         def closing(*_):
-            dismissed[0]=True;self.attachment_dialog=None;return False
+            dismissed[0]=True;self.attachment_dialog=None
+            if not pending[0]:files.clear()
+            return False
         win.connect('close-request',closing)
-        root.append(label(title,'author',True))
-        root.append(label(f'{len(data):,} bytes · sent to the selected room after confirmation. The server may reject this file type or size.','dim-label',True))
-        caption=Gtk.Entry(placeholder_text='Optional caption');root.append(caption)
+        for title,data in files:root.append(label(f'{title} · {len(data):,} bytes','author',True))
+        root.append(label('One message, uploaded in order after confirmation. Failed or cancelled files are not retried automatically.','dim-label',True))
+        caption=Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD_CHAR)
+        caption.get_buffer().set_text(original[0]);caption.set_size_request(-1,80)
+        caption.update_property([Gtk.AccessibleProperty.LABEL],['Attachment message'])
+        scroll=Gtk.ScrolledWindow(min_content_height=80,max_content_height=150,propagate_natural_height=True)
+        scroll.set_child(caption);root.append(scroll)
+        reply_toggle=None
+        if original[1]:
+            target=self.session.store.messages.get(original[1],{})
+            excerpt=safe_text(target.get('body',{}).get('text') or original[1],100)
+            reply_toggle=Gtk.CheckButton(label='Reply to: '+excerpt,active=True)
+            child=reply_toggle.get_child()
+            if isinstance(child,Gtk.Label):child.set_wrap(True)
+            root.append(reply_toggle)
+        if original[2]:root.append(label('Mentions: '+', '.join('@'+safe_text(uid,40) for uid in original[2]),'metadata',True))
         error_label=label('','warning',True);root.append(error_label)
-        pending=[False]
         def submit():
             if pending[0]:return
             if not self.session.ready or generation!=self.session.generation or rid!=self.room_id or 'embed:upload' not in self.session.caps:
-                error_label.set_text('Connection changed. Close and choose the file again.');return
+                error_label.set_text('Connection changed. Close and choose the files again.');return
+            if self.transfers.active:
+                error_label.set_text('Finish or cancel the current transfer first.');return
             if not self.session.store.rooms.get(rid,{}).get('_joined'):
-                error_label.set_text('Join the room before attaching a file.');return
+                error_label.set_text('Join the room before attaching files.');return
+            buffer=caption.get_buffer();text=buffer.get_text(buffer.get_start_iter(),buffer.get_end_iter(),False)
+            if len(text.encode())>32000:error_label.set_text('Attachment message exceeds 32,000 bytes.');return
             pending[0]=True;control.set_sensitive(False)
-            params={'room_id':rid,'body':{'text':caption.get_text(),'format':'plain','embeds':[{'kind':'upload','title':title}]}}
+            params={'room_id':rid,'body':{'text':text,'format':'plain','mentions':original[2],
+                    'embeds':[{'kind':'upload','title':title} for title,_ in files]}}
+            if reply_toggle is not None and reply_toggle.get_active():params['reply_to']={'message_id':original[1]}
             def accepted(result,error):
-                if self.closing:return
+                if self.closing:files.clear();return
                 if error:
-                    error_label.set_text(safe_text(error.get('message','Attachment was not accepted.'))+' Close and check history before trying again.');return
+                    error_label.set_text(safe_text(error.get('message','Attachments were not accepted.'))+' Close and check history before trying again.')
+                    files.clear();return
+                # The message text/reply has been posted even if a later upload fails.
+                if rid==self.room_id and (self.text(),self.reply,self.mention_ids)==original:
+                    self.editor.get_buffer().set_text('');self.cancel_reply();self.mention_ids=[]
+                self.schedule_state()
                 if dismissed[0]:
-                    self.transfer_state('Attachment message posted; file upload cancelled. Check the message before retrying.');return
+                    files.clear();self.transfer_state('Message posted; file uploads cancelled. Check history before retrying.');return
                 win.close();self.attachment_dialog=None
-                if generation!=self.session.generation:
-                    self.transfer_state('Connection changed. Attachment delivery may be incomplete; check history.');return
-                embeds=result.get('embeds',[])
-                if not embeds or embeds[0].get('kind')!='upload' or not embeds[0].get('write_url'):
-                    self.transfer_state('The server did not return an upload URL. The message may contain a pending attachment.');return
-                def finished(_,error):
-                    if not self.closing:self.transfer_state(error or 'Attachment uploaded. The server supplies its final preview.')
+                embeds=result.get('embeds',[]) if isinstance(result,dict) else []
                 try:
-                    self.transfers.request('PUT',embeds[0]['write_url'],self.session.url,finished,data)
-                    self.transfer_state('Uploading attachment…')
-                except ValueError as e:self.transfer_state(str(e))
+                    if not isinstance(embeds,list) or len(embeds)!=len(files):raise ValueError('The server did not accept every attachment.')
+                    for embed in embeds:
+                        if not isinstance(embed,dict) or embed.get('kind')!='upload':raise ValueError('Invalid upload response.')
+                        transfer_url(embed.get('write_url'),self.session.url)
+                except ValueError as error:
+                    files.clear();self.transfer_state('Message posted. '+str(error));return
+                total=len(files)
+                def upload(index=0):
+                    if self.closing:files.clear();return
+                    if index==total:
+                        files.clear();self.transfer_state(f'{total} attachment'+('s' if total!=1 else '')+' uploaded.');return
+                    if generation!=self.session.generation or not self.session.ready:
+                        files.clear();self.transfer_state(f'{index} of {total} uploaded. Connection changed; remaining files were not sent.');return
+                    def finished(_,error):
+                        if error:
+                            files.clear()
+                            if not self.closing:self.transfer_state(f'{index} of {total} uploaded. Message already posted. '+error)
+                            return
+                        files[index]=(files[index][0],b'')
+                        upload(index+1)
+                    try:
+                        self.transfers.request('PUT',embeds[index]['write_url'],self.session.url,finished,files[index][1])
+                        self.transfer_state(f'Uploading file {index+1} of {total}…')
+                    except ValueError as error:
+                        files.clear();self.transfer_state(f'{index} of {total} uploaded. Message already posted. '+str(error))
+                upload()
             self.session.request('message',params,accepted)
         footer=box();footer.set_halign(Gtk.Align.END)
         footer.append(button('Cancel',win.close,'flat'))
-        control=button('Send attachment',submit,'suggested-action');footer.append(control);root.append(footer)
+        control=button('Send attachments',submit,'suggested-action');footer.append(control);root.append(footer)
         win.present();return win
 
     def download_attachment(self,embed):

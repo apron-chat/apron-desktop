@@ -32,7 +32,7 @@
       };
     in {
       packages = each (system: { default = package nixpkgs.legacyPackages.${system}; });
-      apps = each (system: { default = { type = "app"; program = "${self.packages.${system}.default}/bin/apron-gtk"; }; });
+      apps = each (system: { default = { type = "app"; meta = self.packages.${system}.default.meta; program = "${self.packages.${system}.default}/bin/apron-gtk"; }; });
       devShells = each (system:
         let pkgs = nixpkgs.legacyPackages.${system}; in {
           default = pkgs.mkShell {
