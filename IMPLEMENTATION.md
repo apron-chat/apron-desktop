@@ -6,7 +6,7 @@ Tests alone never establish full protocol or web parity. Synthetic local servers
 
 | Milestone | Status | Acceptance criteria |
 |---|---|---|
-| Reaction correctness | Tested | Unknown differs from empty; reconcile complete own set before replacement; refuse incomplete/expired/budget-exceeded history; rejection/interruption never retries a write |
+| Reaction correctness | Tested | Unknown differs from empty; reconcile complete own set before replacement; refuse incomplete/expired/budget-exceeded history and mid-scan retention gaps; rejection/interruption never retries a write |
 | Attention recovery | Tested within bounds | Bounded reconnect replay with retained log watermarks, offline edits/mentions deduplicated; gaps explicitly visible; persisted cursors do not invent complete offline counts |
 | Design foundation | Native light/dark/gallery review passed | Shared theme/spacing/control/focus rules; GPUI Kit controls; live component/state gallery; light/dark screenshots |
 | Compact composer | Native wide/compact/minimum passed | One-line idle, bounded growth, reply/files remain visible, keyboard/selection unaffected |
@@ -17,7 +17,7 @@ Tests alone never establish full protocol or web parity. Synthetic local servers
 | Secure login | Implemented; missing-helper test passed, real keyring unverified | Optional Secret Service keyring; no plaintext fallback; rotation handled; errors do not expose tokens |
 | Email/passkeys | Email fixture passed; passkeys not implemented | Match advertised server schemes; document concrete platform/provider blockers rather than approximate credentials |
 | Links/media/search | Safe link action tested; retained search/media preserved | Explicit safe link actions; bounded media; search scope honest; unsupported remote search not invented |
-| Nix/desktop/CI | Core CI passed; initial Nix syntax failure fixed, rerun pending | Installable package/app plus .desktop/icon; locked CI tests; distinguish evaluation/build/hardware checks |
+| Nix/desktop/CI | Core CI passed; Nix evaluation fixed, build running | Installable package/app plus .desktop/icon; locked CI tests; distinguish evaluation/build/hardware checks |
 | Final validation | Core/official/native and final delivery smoke passed | Native wide/compact/minimum/light/dark/forms/errors/menus; regression tests; performance bounds; reviewed screenshots |
 
 Optional conversation tabs are deferred until core workflows are stable. Discord guild rails,

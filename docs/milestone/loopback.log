@@ -1,5 +1,4 @@
-   Compiling apron-gpui v0.1.0 (/workspace/apron-gpui)
-    Finished `test` profile [unoptimized] target(s) in 1.27s
+    Finished `test` profile [unoptimized] target(s) in 0.43s
      Running tests/loopback.rs (target/debug/deps/loopback-fbee9f1341e20599)
 
 running 7 tests
@@ -11,5 +10,5 @@ test official_membership_forms_add_and_remove_another_user ... ok
 test official_reactions_replace_remove_and_reconcile_history ... ok
 test official_room_forms_create_thread_edit_and_leave ... ok
 
-test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.21s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.38s
 

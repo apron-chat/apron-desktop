@@ -23,8 +23,8 @@ web reference e09522d; Dissent design reference 6ff6182. No Dissent code/assets 
 
 ## Validation
 
-- 39 core/fixture tests passed, including email connection affinity, unknown reaction
-  refusal, multi-page reaction preservation, bounded recovery and saved edit mentions.
+- 40 core/fixture tests passed, including email connection affinity, unknown reaction
+  refusal, multi-page reaction preservation, mid-scan retention refusal, bounded recovery and saved edit mentions.
   [Log](docs/milestone/tests.log).
 - Seven owned local loopback tests passed (official server plus synthetic fixture),
   including room/thread create, rename/leave, two-user private-room add/remove with
@@ -79,5 +79,10 @@ shows parent context and caps results so refinement by typing keeps them reachab
 
 Core CI passed for 10963b0. The initial Nix job failed parsing a missing closing
 brace in the toolchain hash table. The follow-up closes the table and declares the
-compiler target platforms for buildRustPackage; Nix build validation remains pending.
+compiler target and unsupported-platform metadata for buildRustPackage. CI now
+passes evaluation and has started building; a successful Nix build is not yet claimed.
 The added two-user membership test passes against the owned official server.
+A further reaction guard refuses a write when retention advances past the next
+scan cursor, even if a prior page contained a known own set. Its new regression
+fixture passes, as do all 40 core/fixture tests and all-target Clippy. The release build and final-source native smoke also pass. The stored UI screenshots
+precede this transport-only guard; individual run hashes retain that distinction.

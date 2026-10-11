@@ -329,6 +329,15 @@ impl Client {
                 params["before"] = json!(end.to_string());
             }
             let page = self.rpc("history", params).await?;
+            // A later page must not skip an interval whose records expired while
+            // scanning: an earlier observed own set could now be obsolete.
+            if horizon.is_some()
+                && !number(&page["history_log_id"]).is_some_and(|floor| floor <= after)
+            {
+                return Err(RemoteError(
+                    "Reaction history became incomplete during reconciliation. No reaction was changed.".into(),
+                ).into());
+            }
             let end = *horizon.get_or_insert(
                 number(&page["latest_log_id"]).context("Missing reaction history horizon")?,
             );
