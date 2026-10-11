@@ -11,13 +11,13 @@ Tests alone never establish full protocol or web parity. Synthetic local servers
 | Design foundation | Native light/dark/gallery review passed | Shared theme/spacing/control/focus rules; GPUI Kit controls; live component/state gallery; light/dark screenshots |
 | Compact composer | Native wide/compact/minimum passed | One-line idle, bounded growth, reply/files remain visible, keyboard/selection unaffected |
 | Navigation | Native switcher/keyboard passed; disclosure implemented | Collapsible parents preserve hidden unread/mentions; fuzzy keyboard room/thread switcher; narrow selection returns focus to composer |
-| Room/member workflows | Tested core room operations; member forms implemented | Protocol-backed create room/thread, settings, leave, member list/add/remove; errors retain input; no automatic retry of uncertain writes |
+| Room/member workflows | Official-server room and two-user membership tests passed | Protocol-backed create room/thread, settings, leave, member list/add/remove; errors retain input; no automatic retry of uncertain writes |
 | Presence/typing/mutes | Implemented; real multi-client validation pending | Capability-gated bounded event state; expiring typing without idle busy polling; protocol-supported controls |
 | Notifications | Implemented; daemon delivery unverified | Explicit opt-in, no unsolicited message body disclosure, mute/focus respected; unavailable service visible |
 | Secure login | Implemented; missing-helper test passed, real keyring unverified | Optional Secret Service keyring; no plaintext fallback; rotation handled; errors do not expose tokens |
 | Email/passkeys | Email fixture passed; passkeys not implemented | Match advertised server schemes; document concrete platform/provider blockers rather than approximate credentials |
 | Links/media/search | Safe link action tested; retained search/media preserved | Explicit safe link actions; bounded media; search scope honest; unsupported remote search not invented |
-| Nix/desktop/CI | Implemented; Nix unavailable locally, CI pending | Installable package/app plus .desktop/icon; locked CI tests; distinguish evaluation/build/hardware checks |
+| Nix/desktop/CI | Core CI passed; initial Nix syntax failure fixed, rerun pending | Installable package/app plus .desktop/icon; locked CI tests; distinguish evaluation/build/hardware checks |
 | Final validation | Core/official/native and final delivery smoke passed | Native wide/compact/minimum/light/dark/forms/errors/menus; regression tests; performance bounds; reviewed screenshots |
 
 Optional conversation tabs are deferred until core workflows are stable. Discord guild rails,

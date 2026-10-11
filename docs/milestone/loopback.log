@@ -1,13 +1,15 @@
-    Finished `test` profile [unoptimized] target(s) in 0.20s
+   Compiling apron-gpui v0.1.0 (/workspace/apron-gpui)
+    Finished `test` profile [unoptimized] target(s) in 1.27s
      Running tests/loopback.rs (target/debug/deps/loopback-fbee9f1341e20599)
 
-running 6 tests
+running 7 tests
 test actor_reports_interruption_without_resending ... ok
 test joining_uses_membership_rpc_and_preserves_room_fields ... ok
 test official_edit_delete_preserves_metadata_and_enforces_author ... ok
 test official_history_reply_upload_and_reconnect ... ok
+test official_membership_forms_add_and_remove_another_user ... ok
 test official_reactions_replace_remove_and_reconcile_history ... ok
 test official_room_forms_create_thread_edit_and_leave ... ok
 
-test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.18s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.21s
 

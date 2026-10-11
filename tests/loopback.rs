@@ -417,3 +417,56 @@ async fn official_room_forms_create_thread_edit_and_leave() {
             .any(|r| r["room_id"] == created["room_id"])
     );
 }
+
+#[tokio::test]
+#[ignore = "requires the dedicated official loopback Apron server"]
+async fn official_membership_forms_add_and_remove_another_user() {
+    use apron_gpui::workflows::Kind;
+    let mut owner = Client::connect(OFFICIAL, None).await.unwrap();
+    owner.guest().await.unwrap();
+    let mut peer = Client::connect(OFFICIAL, None).await.unwrap();
+    let peer_auth = peer.guest().await.unwrap();
+    let peer_id = text(&peer_auth["you"]["user_id"]);
+    let created = owner
+        .rpc(
+            "room_set",
+            json!({"title":"Synthetic membership forms", "private":true}),
+        )
+        .await
+        .unwrap();
+    let room = json!({"room_id":created["room_id"]});
+    let (method, params) = Kind::AddMember.request(&room, "", "", peer_id).unwrap();
+    owner.rpc(method, params).await.unwrap();
+    let list = peer
+        .rpc("room_list", json!({"filter":"joined"}))
+        .await
+        .unwrap();
+    assert!(
+        list["joined"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["room_id"] == room["room_id"])
+    );
+    let (method, params) = Kind::RemoveMember.request(&room, "", "", peer_id).unwrap();
+    owner.rpc(method, params).await.unwrap();
+    let list = peer
+        .rpc("room_list", json!({"filter":"joined"}))
+        .await
+        .unwrap();
+    assert!(
+        !list["joined"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["room_id"] == room["room_id"])
+    );
+    assert!(
+        peer.rpc(
+            "message",
+            json!({"room_id":room["room_id"],"body":{"text":"Synthetic forbidden send"}})
+        )
+        .await
+        .is_err()
+    );
+}

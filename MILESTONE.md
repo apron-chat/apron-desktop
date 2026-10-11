@@ -26,8 +26,9 @@ web reference e09522d; Dissent design reference 6ff6182. No Dissent code/assets 
 - 39 core/fixture tests passed, including email connection affinity, unknown reaction
   refusal, multi-page reaction preservation, bounded recovery and saved edit mentions.
   [Log](docs/milestone/tests.log).
-- Six owned local official-server tests passed, including room/thread create, rename
-  and leave, history/edit/delete/replies/uploads/reactions. [Log](docs/milestone/loopback.log).
+- Seven owned local loopback tests passed (official server plus synthetic fixture),
+  including room/thread create, rename/leave, two-user private-room add/remove with
+  post-removal send denial, history/edit/delete/replies/uploads/reactions. [Log](docs/milestone/loopback.log).
 - Cargo release build, formatting and all-target Clippy with warnings denied passed.
   [Clippy log](docs/milestone/clippy.log).
 - Native Wayland suites passed at [1280×900](docs/milestone/wide/report.json),
@@ -73,3 +74,10 @@ be checked independently. See IMPLEMENTATION.md for bounds and remaining feature
 The compact composer saves vertical space; thread disclosure sits beside its parent,
 and the grouped conversation menu avoids a tall flat action list. The fuzzy switcher
 shows parent context and caps results so refinement by typing keeps them reachable.
+
+## CI follow-up
+
+Core CI passed for 10963b0. The initial Nix job failed parsing a missing closing
+brace in the toolchain hash table. The follow-up closes the table and declares the
+compiler target platforms for buildRustPackage; Nix build validation remains pending.
+The added two-user membership test passes against the owned official server.
