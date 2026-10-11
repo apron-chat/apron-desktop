@@ -39,7 +39,7 @@ software require an environment that exposes them; headless tests cannot certify
 - Real Nix evaluation/build is blocked locally by the missing Nix executable. Real
   keyring round-trip is blocked by missing secret-tool/service; notification delivery,
   niri, hardware GPU, IME and screen-reader behavior need their actual desktop environment.
-- Follow-up feature work (not claimed implemented): avatars, richer media viewing,
+- Follow-up feature work (not claimed implemented): audio/video playback,
   native passkeys and broader moderation commands. See INTEGRATION_ASSESSMENT.md. Conversation
   tabs remain an optional later design experiment.
 
@@ -48,3 +48,7 @@ software require an environment that exposes them; headless tests cannot certify
 Durable versioned preferences, explicit file drop/clipboard staging, pre-send and
 post-send attachment title edits, searchable Unicode reactions and advertised optional
 presence/opt-in idle are implemented. See DAILY_WORKFLOWS.md for verification and limits.
+
+Explicit bounded raster viewing, same-server/inline avatars with confirmed upload,
+and confirmed server-specific /kick now have implementation and evidence in
+MEDIA_MODERATION.md. PASSKEY_DESIGN.md records the unresolved origin/RP decision.

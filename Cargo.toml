@@ -11,6 +11,7 @@ ui = ["dep:gpui-kit", "dep:chrono", "dep:notify-rust"]
 ui-tests = ["ui", "gpui-kit/test-support"]
 
 [dependencies]
+base64 = "0.22"
 emojis = "=0.9.0"
 notify-rust = { version = "=4.18.2", optional = true }
 gpui-kit = { version = "=0.7.1", optional = true }

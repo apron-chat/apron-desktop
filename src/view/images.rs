@@ -313,9 +313,21 @@ impl Conversation {
         };
         let v = entity.read(cx);
         let key = Self::image_key(id, ix, &url);
+        let viewer_owner = owner.clone();
+        let viewer_key = key.clone();
+        let viewer_url = url.clone();
+        let viewer_button = crate::design::button(SharedString::from(format!("view-{id}-{ix}")))
+            .small()
+            .label("Open image viewer…")
+            .on_click(move |_, w, cx| {
+                let _ = viewer_owner.update(cx, |v, cx| {
+                    v.open_viewer(viewer_url.clone(), Some(viewer_key.clone()), None, w, cx)
+                });
+            });
         if let Some(image) = v.image_cache.get(&key) {
             return div()
                 .max_w_full()
+                .child(viewer_button)
                 .child(
                     img(image.clone())
                         .max_w_full()
@@ -334,6 +346,7 @@ impl Conversation {
             .flex_col()
             .items_start()
             .gap_1()
+            .child(viewer_button)
             .child(
                 crate::design::button(SharedString::from(format!("image-{id}-{ix}")))
                     .ghost()
@@ -349,6 +362,7 @@ impl Conversation {
                             v.transfer_busy = true;
                             if !v.command(
                                 Command::LoadImage {
+                                    avatar: false,
                                     generation: v.generation,
                                     key: key.clone(),
                                     url: url.clone(),

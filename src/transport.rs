@@ -20,6 +20,10 @@ use tokio_tungstenite::{
 #[derive(Debug)]
 pub enum Command {
     RecoverStep,
+    UploadAvatar {
+        operation: u64,
+        file: Attachment,
+    },
     Typing {
         room: String,
         seconds: u64,
@@ -62,6 +66,7 @@ pub enum Command {
         paths: Vec<PathBuf>,
     },
     LoadImage {
+        avatar: bool,
         generation: u64,
         key: String,
         url: String,
@@ -654,6 +659,31 @@ async fn handle_command(
     transfers: &mut tokio::task::JoinSet<()>,
 ) -> Result<bool> {
     match command {
+        Command::UploadAvatar { operation, file } => {
+            let result=async {
+                ensure!(transfers.is_empty(), "Finish or cancel the current transfer first");
+                ensure!(file.bytes.len()<=media::LIMIT,"Avatar exceeds 8 MiB");
+                for cap in ["command","embed:upload"] {ensure!(c.server["capabilities"].as_array().is_some_and(|a|a.iter().any(|v|v==cap)),"Avatar upload is unsupported");}
+                let result=c.rpc("command",json!({"body":{"text":"/avatar","embeds":[{"kind":"upload","title":"avatar.png"}]}})).await?;
+                Ok::<_,anyhow::Error>(media::transfer_url(text_value(&result["embeds"][0]["write_url"]),url)?.to_string())
+            }.await;
+            match result {
+                Ok(target) => {
+                    let events = events.clone();
+                    let server = url.to_owned();
+                    transfers.spawn(async move {
+                        emit(&events,Event::Transfer{message:"Uploading avatar…".into(),busy:true}).await;
+                        let result=media::put(&target,&server,file.bytes).await.map(|_|json!({})).map_err(|_|"Avatar completion is uncertain. Inspect your profile before retrying.".into());
+                        emit(&events,Event::Managed{operation,result}).await;
+                        emit(&events,Event::Transfer{message:"Avatar request finished".into(),busy:false}).await;
+                    });
+                }
+                Err(e) => {
+                    let remote = e.downcast_ref::<RemoteError>().is_some();
+                    emit(events,Event::Managed{operation,result:Err(if remote {e.to_string()} else {"Avatar request failed or completion is uncertain. Inspect your profile before retrying.".into()})}).await;
+                }
+            }
+        }
         Command::Typing { room, seconds } => {
             if c.server["capabilities"]
                 .as_array()
@@ -673,7 +703,9 @@ async fn handle_command(
             method,
             payload,
         } => {
-            let cap = if matches!(method.as_str(), "status" | "me") {
+            let cap = if method == "command" {
+                "command"
+            } else if matches!(method.as_str(), "status" | "me") {
                 "status"
             } else {
                 "rooms"
@@ -688,7 +720,7 @@ async fn handle_command(
             let result = if invalid_status
                 || !matches!(
                     method.as_str(),
-                    "room_set" | "room_join" | "room_leave" | "status" | "me"
+                    "room_set" | "room_join" | "room_leave" | "status" | "me" | "command"
                 )
                 || !c.server["capabilities"]
                     .as_array()
@@ -861,7 +893,7 @@ async fn handle_command(
         Command::Reconnect => return Ok(false),
         Command::CancelTransfer => {
             transfers.abort_all();
-            emit(events,Event::Transfer{message:"Transfer cancelled; message may already be posted. Inspect history before retrying.".into(),busy:false}).await;
+            emit(events,Event::Transfer{message:"Transfer cancelled. For an upload, inspect the message or profile before retrying.".into(),busy:false}).await;
         }
         Command::Join { room } => {
             if let Err(e) = c.rpc("room_join", json!({"room_id":room})).await {
@@ -1001,6 +1033,7 @@ async fn handle_command(
             }
         },
         Command::LoadImage {
+            avatar,
             generation,
             key,
             url: target,
@@ -1028,11 +1061,8 @@ async fn handle_command(
                     },
                 )
                 .await;
-                let result = async {
-                    let bytes = media::get(&target, &server).await?;
-                    tokio::task::spawn_blocking(move || crate::images::normalize(&bytes)).await?
-                }
-                .await;
+                let result =
+                    async { crate::visual_media::load(&target, &server, avatar).await }.await;
                 emit(
                     &events,
                     Event::Image {

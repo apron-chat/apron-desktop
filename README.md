@@ -16,7 +16,7 @@ only by optional synthetic test tools. Full apron-web parity remains deferred.
 
 See [IMPLEMENTATION.md](IMPLEMENTATION.md) for the maintained checklist,
 [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) for shared components and interaction rules,
-and [DAILY_WORKFLOWS.md](DAILY_WORKFLOWS.md) for current validation. [REFINEMENT.md](REFINEMENT.md)
+and [MEDIA_MODERATION.md](MEDIA_MODERATION.md) for current validation. [REFINEMENT.md](REFINEMENT.md)
 records the earlier Swiftcord-inspired pass.
 
 ## Build and launch on NixOS / niri
@@ -44,7 +44,7 @@ plus the existing development shell. `nix/package.nix` installs the desktop entr
 and icon and wraps runtime libraries, libsecret, xdg-utils and wl-clipboard. `nix/toolchain.nix`
 pins official Rust 1.99.0 binary components by checksum because the pinned nixpkgs
 compiler is older. Cargo.lock fixes crate versions. The local environment has no Nix executable. GitHub Actions successfully built
-the pinned Nix package at baseline `46e19b5`; exact-head validation is recorded in PR #2.
+the pinned Nix package at baseline `7c2cf24`; exact-head validation is recorded in PR #2.
 Actual niri/hardware validation remains separate from headless Weston checks.
 No compiler patches or RUSTC_BOOTSTRAP are used.
 
@@ -179,7 +179,9 @@ links for browser opening. Credential-bearing and active/local schemes are rejec
 No previews or images are fetched automatically.
 
 **Remaining:** native passkeys, complete archive reaction counts, remote search,
-avatars, richer media viewing and broader server-specific moderation commands.
+audio/video playback, cross-origin avatars and broader server-specific moderation commands.
+The explicit raster viewer, controlled same-server/inline avatar display/upload and
+confirmed reference-server `/kick` workflow are implemented; see [their guide](MEDIA_MODERATION.md).
 See [the integration assessment](INTEGRATION_ASSESSMENT.md) for concrete next steps. The protocol defines no generic
 remote search or room-list pagination cursor; no endpoints are invented. Room lists
 remain capped at 256. Full web parity is not claimed.
@@ -221,7 +223,7 @@ See [DAILY_WORKFLOWS.md](DAILY_WORKFLOWS.md) for current validation and visual r
 ## Verification
 
 All commands run from the repository root. Python scripts here are optional test
-fixtures, not application modules. To run the eight integration tests, build the
+fixtures, not application modules. To run the nine integration tests, build the
 [official Apron server](https://github.com/shazow/apron) separately, then use:
 
 ```sh

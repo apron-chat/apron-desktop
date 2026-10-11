@@ -513,3 +513,79 @@ async fn official_advertised_presence_idle_and_mute() {
     }
     assert!(states.contains(&json!(true)) && states.contains(&json!(false)));
 }
+
+#[tokio::test]
+#[ignore = "requires official synthetic loopback server"]
+async fn official_avatar_and_scoped_kick_authorization() {
+    let mut owner = Client::connect(OFFICIAL, None).await.unwrap();
+    let identity = owner.guest().await.unwrap();
+    let mut other = Client::connect(OFFICIAL, None).await.unwrap();
+    let target = other.guest().await.unwrap();
+    let room = owner
+        .rpc(
+            "room_set",
+            json!({"title":"Synthetic moderation","private":true}),
+        )
+        .await
+        .unwrap();
+    let rid = text(&room["room_id"]);
+    let uid = text(&target["you"]["user_id"]);
+    owner
+        .rpc("room_join", json!({"room_id":rid,"user_id":uid}))
+        .await
+        .unwrap();
+    let (_, denied) = apron_gpui::workflows::Kind::Kick
+        .request(
+            &room,
+            "",
+            "Synthetic reason",
+            text(&identity["you"]["user_id"]),
+        )
+        .unwrap();
+    assert!(other.rpc("command", denied).await.is_err());
+    let (_, allowed) = apron_gpui::workflows::Kind::Kick
+        .request(&room, "", "Synthetic reason", uid)
+        .unwrap();
+    owner.rpc("command", allowed).await.unwrap();
+    assert!(
+        other
+            .rpc(
+                "message",
+                json!({"room_id":rid,"body":{"text":"Denied after removal"}})
+            )
+            .await
+            .is_err()
+    );
+    let page = owner.history(rid, None).await.unwrap();
+    assert!(
+        page["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| text(&m["body"]["text"]).contains("Synthetic reason"))
+    );
+    let result = owner
+        .rpc(
+            "command",
+            json!({"body":{"text":"/avatar","embeds":[{"kind":"upload","title":"avatar.png"}]}}),
+        )
+        .await
+        .unwrap();
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::new_rgb8(48, 48)
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .unwrap();
+    media::put(
+        text(&result["embeds"][0]["write_url"]),
+        OFFICIAL,
+        bytes.into_inner(),
+    )
+    .await
+    .unwrap();
+    let me = owner.rpc("me", json!({})).await.unwrap();
+    let source = text(&me["you"]["avatar"]);
+    let raster = apron_gpui::visual_media::load(source, OFFICIAL, true)
+        .await
+        .unwrap();
+    assert_eq!((raster.width, raster.height), (48, 48));
+}

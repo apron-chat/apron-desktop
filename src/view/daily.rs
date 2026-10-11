@@ -140,13 +140,15 @@ async fn run(view: WeakEntity<Conversation>, output: String, cx: &mut AsyncWindo
         "Stale edit must not submit"
     );
     stage(&output, "stale-edit", cx).await;
-    cx.update(|w, cx| key("escape", w, cx)).unwrap();
+    cx.update(|w, cx| crate::smoke::key("escape", w, cx))
+        .unwrap();
     settle(cx).await;
     for _ in 0..2 {
         view.update_in(cx, |v, w, cx| v.open_mutation(id, false, w, cx))
             .unwrap();
         settle(cx).await;
-        cx.update(|w, cx| key("escape", w, cx)).unwrap();
+        cx.update(|w, cx| crate::smoke::key("escape", w, cx))
+            .unwrap();
         settle(cx).await;
     }
     // Normal native clipboard text must keep the established paste behavior.
@@ -283,6 +285,7 @@ async fn run(view: WeakEntity<Conversation>, output: String, cx: &mut AsyncWindo
     view.update_in(cx, |v, _, cx| {
         v.command(
             Command::LoadImage {
+                avatar: false,
                 generation: v.generation,
                 key,
                 url,
@@ -293,6 +296,184 @@ async fn run(view: WeakEntity<Conversation>, output: String, cx: &mut AsyncWindo
     .unwrap();
     wait(&view, cx, move |v, _| v.image_cache.contains_key(&cachekey)).await;
     stage(&output, "image-loaded", cx).await;
+    // Full-size viewer shares the actor's bounded transfer lane; opening never fetches.
+    let (viewer_url, viewer_key) = view
+        .update_in(cx, |v, _, _| {
+            let m = v.store.get(image_id).unwrap();
+            let u = m.raw["body"]["embeds"][0]["url"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            (u.clone(), Conversation::image_key(image_id, 0, &u))
+        })
+        .unwrap();
+    wait(&view, cx, |v, _| !v.transfer_busy).await;
+    view.update_in(cx, |v, w, cx| {
+        v.open_viewer(viewer_url.clone(), Some(viewer_key.clone()), None, w, cx)
+    })
+    .unwrap();
+    let viewer = view
+        .update_in(cx, |v, _, _| v.viewer.as_ref().unwrap().upgrade().unwrap())
+        .unwrap();
+    cx.update(|_, cx| {
+        viewer.update(cx, |f, cx| {
+            assert!(!f.loading && f.raster.is_none());
+            f.load(cx);
+        })
+    })
+    .unwrap();
+    wait(&view, cx, |v, cx| {
+        v.viewer
+            .as_ref()
+            .and_then(|f| f.upgrade())
+            .is_some_and(|f| f.read(cx).raster.is_some())
+    })
+    .await;
+    stage(&output, "viewer-fit", cx).await;
+    let avatar_raster = cx
+        .update(|_, cx| {
+            viewer.update(cx, |f, cx| {
+                f.zoom_by(8., cx);
+                assert_eq!(f.zoom, Some(4.));
+                apron_gpui::images::normalize(&f.raster.as_ref().unwrap().png).unwrap()
+            })
+        })
+        .unwrap();
+    stage(&output, "viewer-zoom", cx).await;
+    cx.update(|w, cx| crate::smoke::key("escape", w, cx))
+        .unwrap();
+    wait(&view, cx, |v, _| !v.transfer_busy).await;
+    // Closing releases decoded bytes and rejects a cancelled load's late completion.
+    cx.update(|_, cx| assert!(viewer.read(cx).raster.is_none()))
+        .unwrap();
+    view.update_in(cx, |v, w, cx| {
+        v.open_viewer(viewer_url.clone(), Some(viewer_key.clone()), None, w, cx)
+    })
+    .unwrap();
+    let cancelled = view
+        .update_in(cx, |v, _, _| v.viewer.as_ref().unwrap().upgrade().unwrap())
+        .unwrap();
+    cx.update(|w, cx| {
+        cancelled.update(cx, |f, cx| {
+            f.load(cx);
+            f.dismiss(w, cx);
+        });
+    })
+    .unwrap();
+    wait(&view, cx, |v, _| !v.transfer_busy).await;
+    cx.update(|_, cx| assert!(cancelled.read(cx).raster.is_none()))
+        .unwrap();
+    // Confirming an avatar upload is distinct from merely choosing/preparing it.
+    view.update_in(cx, |v, w, cx| v.avatar_upload_dialog(avatar_raster, w, cx))
+        .unwrap();
+    stage(&output, "avatar-confirm", cx).await;
+    let upload = view
+        .update_in(cx, |v, _, _| {
+            v.avatar_upload.as_ref().unwrap().upgrade().unwrap()
+        })
+        .unwrap();
+    cx.update(|_, cx| {
+        upload.update(cx, |f, cx| {
+            assert!(f.pending.is_none());
+            f.submit(cx);
+        })
+    })
+    .unwrap();
+    wait(&view, cx, |v, _| {
+        !v.transfer_busy && v.avatar_source(&v.you).is_some()
+    })
+    .await;
+    view.update_in(cx, |v, w, cx| {
+        assert!(v.avatar_cache.is_empty());
+        v.avatar_dialog(v.you.clone(), w, cx);
+    })
+    .unwrap();
+    let avatar = view
+        .update_in(cx, |v, _, _| v.viewer.as_ref().unwrap().upgrade().unwrap())
+        .unwrap();
+    cx.update(|_, cx| avatar.update(cx, |f, cx| f.load(cx)))
+        .unwrap();
+    wait(&view, cx, |v, cx| {
+        v.viewer
+            .as_ref()
+            .and_then(|f| f.upgrade())
+            .is_some_and(|f| f.read(cx).raster.is_some())
+    })
+    .await;
+    stage(&output, "avatar-preview", cx).await;
+    cx.update(|w, cx| {
+        gpui_kit::component::Theme::change(gpui_kit::component::ThemeMode::Dark, Some(w), cx);
+        crate::design::apply(cx);
+    })
+    .unwrap();
+    stage(&output, "avatar-dark", cx).await;
+    cx.update(|w, cx| {
+        gpui_kit::component::Theme::change(gpui_kit::component::ThemeMode::Light, Some(w), cx);
+        crate::design::apply(cx);
+    })
+    .unwrap();
+    cx.update(|w, cx| {
+        avatar.update(cx, |f, cx| {
+            f.use_avatar(cx);
+            f.dismiss(w, cx);
+        });
+    })
+    .unwrap();
+    assert!(
+        view.update_in(cx, |v, _, _| v.avatar_cache.len() == 1)
+            .unwrap()
+    );
+    let (avatar_user, original_source) = view
+        .update_in(cx, |v, _, _| {
+            let original = v.users[&v.you]["avatar"].clone();
+            v.users.get_mut(&v.you).unwrap()["avatar"] =
+                json!("https://foreign.invalid/blocked.png");
+            (v.you.clone(), original)
+        })
+        .unwrap();
+    cx.update(|_, cx| assert!(Conversation::avatar_image(&avatar_user, &view, cx).is_none()))
+        .unwrap();
+    view.update_in(cx, |v, _, _| {
+        v.users.get_mut(&avatar_user).unwrap()["avatar"] = original_source
+    })
+    .unwrap();
+    // Exercise confirmation and a real server denial; no request on initial Review.
+    view.update_in(cx, |v, w, cx| {
+        v.manage_dialog(apron_gpui::workflows::Kind::Kick, w, cx)
+    })
+    .unwrap();
+    let moderation = view
+        .update_in(cx, |v, _, _| {
+            v.manage_form.as_ref().unwrap().upgrade().unwrap()
+        })
+        .unwrap();
+    let me = view.update_in(cx, |v, _, _| v.you.clone()).unwrap();
+    cx.update(|w, cx| {
+        moderation.update(cx, |f, cx| {
+            f.user.update(cx, |s, cx| s.set_value(me, w, cx));
+            f.description
+                .update(cx, |s, cx| s.set_value("Synthetic review reason", w, cx));
+            f.submit(w, cx);
+            assert!(f.confirmed);
+        })
+    })
+    .unwrap();
+    assert!(
+        view.update_in(cx, |v, _, _| v.manage_pending.is_none())
+            .unwrap()
+    );
+    stage(&output, "moderation-confirm", cx).await;
+    cx.update(|w, cx| moderation.update(cx, |f, cx| f.submit(w, cx)))
+        .unwrap();
+    wait(&view, cx, |v, cx| {
+        v.manage_form
+            .as_ref()
+            .and_then(|f| f.upgrade())
+            .is_some_and(|f| !f.read(cx).error.is_empty())
+    })
+    .await;
+    stage(&output, "moderation-denied", cx).await;
+    cx.update(|w, cx| w.close_dialog(cx)).unwrap();
     let temporary = tempfile::tempdir().unwrap();
     let copied = temporary.path().join("copied.txt");
     let dropped = temporary.path().join("dropped.txt");
@@ -539,6 +720,6 @@ async fn run(view: WeakEntity<Conversation>, output: String, cx: &mut AsyncWindo
     })
     .await;
     stage(&output, "final", cx).await;
-    std::fs::write(&output,serde_json::to_vec_pretty(&json!({"passed":true,"checks":["Markdown native render","official reaction add/remove through transport actor","official server edit and delete","stale edit rejection and repeated Escape dialogs","native text clipboard paste","room identity completion and explicit mention IDs","native PNG and JPEG clipboard offers","preview without automatic send","two official uploads","explicit same-server bounded image loading","private opt-in save and ordered reset","emoji picker Unicode sequence through reconciled reaction actor","real URI-list clipboard files","platform-dispatched file drop and explicit upload","attachment cancellation and directory error preserve prior files","durable appearance/notification/privacy reload","idle threshold and return to attended","pre-send shared title validation and rename","post-send embed title change preserves URL ID and caption"]})).unwrap()).unwrap();
+    std::fs::write(&output,serde_json::to_vec_pretty(&json!({"passed":true,"checks":["Markdown native render","official reaction add/remove through transport actor","official server edit and delete","stale edit rejection and repeated Escape dialogs","native text clipboard paste","room identity completion and explicit mention IDs","native PNG and JPEG clipboard offers","preview without automatic send","two official uploads","explicit same-server bounded image loading","private opt-in save and ordered reset","emoji picker Unicode sequence through reconciled reaction actor","real URI-list clipboard files","platform-dispatched file drop and explicit upload","attachment cancellation and directory error preserve prior files","durable appearance/notification/privacy reload","idle threshold and return to attended","pre-send shared title validation and rename","post-send embed title change preserves URL ID and caption","explicit full-size viewer fit zoom Escape cancellation and decoded-data release","confirmed avatar upload and user-controlled cached display","moderation review sends nothing and server denial preserves form"]})).unwrap()).unwrap();
     cx.update(|_, cx| cx.quit()).unwrap();
 }

@@ -44,3 +44,11 @@ scannable at 640×480. Caption and attachment titles are separate labeled fields
 Rename changes the shared display title, never a local filename. File drag hover
 uses the semantic accent and only stages files. Emoji search presents a bounded
 page with explicit selection and Toggle, plus textual names and keyboard focus.
+
+## Media and moderation
+
+Image viewers use available window width, a viewport-aware raster area and wrapping
+fixed footer controls. Opening is separate from loading; avatar preview is separate
+from showing it in chat. Moderation review replaces editable fields with an exact
+room/user/reason summary, and keeps Back/Cancel/Confirm in the footer. Destructive
+confirmation uses the shared danger style and server errors preserve review context.

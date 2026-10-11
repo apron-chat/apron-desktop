@@ -24,3 +24,4 @@ pub mod emoji;
 pub mod presence;
 
 pub mod clipboard;
+pub mod visual_media;

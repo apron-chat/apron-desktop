@@ -1,3 +1,4 @@
+pub(crate) mod avatar_upload;
 pub(crate) mod daily;
 mod discover;
 mod edit;
@@ -12,6 +13,7 @@ mod mentions;
 mod presence;
 pub(crate) mod switcher;
 pub(crate) mod titles;
+pub(crate) mod viewer;
 use apron_gpui::{
     attention::Attention,
     auth::Secret,
@@ -74,6 +76,9 @@ actions!(
         RemoveMember,
         LeaveRoom,
         ShowMembers,
+        KickMember,
+        HideAvatars,
+        UploadAvatar,
         ChooseReaction,
         ReactLike,
         ReactHeart,
@@ -136,6 +141,9 @@ pub struct Conversation {
     pub(crate) session_form: Option<WeakEntity<crate::session::SessionForm>>,
     rooms: BTreeMap<String, Value>,
     users: BTreeMap<String, Value>,
+    avatar_cache: BTreeMap<String, (String, Arc<Image>)>,
+    pub(crate) viewer: Option<WeakEntity<viewer::Viewer>>,
+    pub(crate) avatar_upload: Option<WeakEntity<avatar_upload::AvatarUpload>>,
     draft_mentions: BTreeMap<String, std::collections::BTreeSet<String>>,
     mention_index: usize,
     pub(crate) room: String,
@@ -331,6 +339,9 @@ impl Conversation {
             session_form: None,
             rooms: BTreeMap::new(),
             users: Default::default(),
+            avatar_cache: Default::default(),
+            viewer: None,
+            avatar_upload: None,
             draft_mentions: Default::default(),
             mention_index: 0,
             room: String::new(),
@@ -484,6 +495,7 @@ impl Conversation {
         self.drafts.clear();
         self.draft_mentions.clear();
         self.users.clear();
+        self.avatar_cache.clear();
         self.files.clear();
         self.attachment_revision += 1;
         self.staged_images.clear();
@@ -542,7 +554,7 @@ impl Conversation {
         if let Some(users) = list["users"].as_array() {
             for user in users.iter().take(1024) {
                 if let Some(id) = user["user_id"].as_str().filter(|id| id.len() <= 128) {
-                    self.users.insert(id.into(),serde_json::json!({"user_id":id,"name":model::clean(user["name"].as_str().unwrap_or(id),80).replace(['\n','\t']," ")}));
+                    self.users.insert(id.into(),serde_json::json!({"user_id":id,"name":model::clean(user["name"].as_str().unwrap_or(id),80).replace(['\n','\t']," "), "avatar":user["avatar"].as_str().filter(|v|v.len()<=apron_gpui::visual_media::AVATAR_SOURCE_LIMIT).unwrap_or("")}));
                 }
             }
         }
@@ -662,6 +674,12 @@ impl Conversation {
                     self.select(room.to_owned(), window, cx);
                 }
 
+                if let Some(form) = self.avatar_upload.as_ref().and_then(|f| f.upgrade()) {
+                    if form.read(cx).pending == Some(operation) {
+                        self.transfer_busy = false;
+                    }
+                    form.update(cx, |f, cx| f.finish(operation, result.clone(), window, cx));
+                }
                 if let Some(form) = self.manage_form.as_ref().and_then(|f| f.upgrade()) {
                     form.update(cx, |f, cx| f.finish(operation, result.clone(), window, cx));
                 }
@@ -725,6 +743,12 @@ impl Conversation {
             }
 
             Event::State(s) => {
+                if let Some(form) = self.avatar_upload.as_ref().and_then(|f| f.upgrade()) {
+                    let pending = form.read(cx).pending;
+                    if let Some(op) = pending {
+                        form.update(cx,|f,cx|f.finish(op,Err("Connection changed; avatar completion is uncertain. Inspect your profile before retrying.".into()),window,cx));
+                    }
+                }
                 if let Some(op) = self.manage_pending.take()
                     && let Some(form) = self.manage_form.as_ref().and_then(|f| f.upgrade())
                 {
@@ -849,7 +873,11 @@ impl Conversation {
                         self.own_status =
                             model::clean(model::text(&frame["params"]["you"]["status"]), 40);
                     }
-                    let user = &frame["params"]["new"];
+                    let user = if frame["params"]["new"].is_object() {
+                        &frame["params"]["new"]
+                    } else {
+                        &frame["params"]["you"]
+                    };
                     let id = model::text(&user["user_id"]);
                     if !id.is_empty()
                         && id.len() <= 128
@@ -949,7 +977,12 @@ impl Conversation {
                 key,
                 result,
             } => {
-                if generation == self.generation && self.image_key_current(&key) {
+                if key.starts_with("viewer:") {
+                    if let Some(form) = self.viewer.as_ref().and_then(|v| v.upgrade()) {
+                        let current = form.read(cx).current(self);
+                        form.update(cx, |f, cx| f.finish(generation, &key, result, current, cx));
+                    }
+                } else if generation == self.generation && self.image_key_current(&key) {
                     match result {
                         Ok(raster) => {
                             if self.image_cache.len() >= 8 {
@@ -1268,7 +1301,32 @@ impl Conversation {
                         .items_center()
                         .justify_center()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child(initial),
+                        .when_some(
+                            Self::avatar_image(model::text(&raw["from"]["user_id"]), &owner, cx),
+                            |d, image| {
+                                d.child(
+                                    img(image)
+                                        .size_8()
+                                        .rounded_full()
+                                        .object_fit(ObjectFit::Contain),
+                                )
+                            },
+                        )
+                        .when(
+                            Self::avatar_image(model::text(&raw["from"]["user_id"]), &owner, cx)
+                                .is_none(),
+                            |d| d.child(initial),
+                        )
+                        .id(SharedString::from(format!("avatar-{}", id)))
+                        .cursor_pointer()
+                        .on_click({
+                            let owner = owner.clone();
+                            let user = model::text(&raw["from"]["user_id"]).to_owned();
+                            move |_, w, cx| {
+                                let _ =
+                                    owner.update(cx, |v, cx| v.avatar_dialog(user.clone(), w, cx));
+                            }
+                        }),
                 )
             })
             .child(
@@ -1856,8 +1914,11 @@ impl Conversation {
                                     .menu("Create thread…", Box::new(CreateThread))
                                     .menu("Room settings…", Box::new(RoomSettings))
                                     .menu("Members…", Box::new(ShowMembers))
+                                    .menu("Set my avatar…", Box::new(UploadAvatar))
+                                    .menu("Hide loaded avatars", Box::new(HideAvatars))
                                     .menu("Add member…", Box::new(AddMember))
                                     .menu("Remove member…", Box::new(RemoveMember))
+                                    .menu("Remove with reason…", Box::new(KickMember))
                                     .menu("Leave room…", Box::new(LeaveRoom))
                             })
                             .menu("Next unread mention", Box::new(NextMention))
@@ -2260,6 +2321,9 @@ impl Render for Conversation {
             .on_action(cx.listener(|v,_:&RemoveMember,w,cx|v.manage_dialog(apron_gpui::workflows::Kind::RemoveMember,w,cx)))
             .on_action(cx.listener(|v,_:&LeaveRoom,w,cx|v.manage_dialog(apron_gpui::workflows::Kind::Leave,w,cx)))
             .on_action(cx.listener(|v,_:&ShowMembers,w,cx|v.member_dialog(w,cx)))
+            .on_action(cx.listener(|v,_:&HideAvatars,_,cx|{v.avatar_cache.clear();cx.notify();}))
+            .on_action(cx.listener(|v,_:&UploadAvatar,w,cx|v.choose_avatar(w,cx)))
+            .on_action(cx.listener(|v,_:&KickMember,w,cx|v.manage_dialog(apron_gpui::workflows::Kind::Kick,w,cx)))
             .on_action(cx.listener(|v,_:&ToggleNotifications,w,cx|v.change_preference(local::Preference::Notifications,w,cx)))
             .on_action(cx.listener(|v,_:&ToggleMute,_,cx|v.set_status(serde_json::json!({"room_id":v.room,"mute":!v.muted(&v.room)}),"status",cx)))
             .on_action(cx.listener(|v,_:&PresenceDnd,_,cx|v.set_status(serde_json::json!({"status":"dnd"}),"me",cx)))

@@ -11,7 +11,7 @@ a Tokio actor. No web view or browser is embedded.
 | Email and keyring | Email proposal/code on a separate unauthenticated connection; synthetic test passed. Keyring load/store/clear/rotation implemented; real provider/service validation unrun |
 | Passkeys / other auth | Native WebAuthn not implemented; no generic OAuth protocol assumed |
 | Rooms and thread navigation | Implemented; fuzzy switcher, collapsible parent grouping, join, rename/leave deltas; 256-room cap |
-| Room/thread management | Create, title/description settings, leave, member list and exact-ID add/remove forms; server policy enforced. Broader moderation commands deferred |
+| Room/thread management | Create, title/description settings, leave, member list and exact-ID add/remove forms; server policy enforced. Confirmed exact-ID /kick with reason; other moderation commands deferred |
 | Latest/older history | Pages of 50, bounded cache, log reconciliation, stale-response rejection |
 | Sending and replies | Implemented; local room drafts; uncertain sends never auto-resend |
 | Message edit/delete | Own-message contextual UI, stale target checks, server permission errors; no uncertain retries |
@@ -23,7 +23,8 @@ a Tokio actor. No web view or browser is embedded.
 | Typing, presence, mutes | Expiring typing, online/opt-out presence, member presence labels and per-room mutes; advertised DND/invisible and opt-in focus/five-minute idle |
 | Notifications | Durable opt-in, body-free native notifications, focus/mute/DND gating; actual daemon delivery unverified |
 | Attachments | Explicit bounded upload/download; staged and sent title editing; no redirects, same origin, no overwrite |
-| Images | Native clipboard raster paste, removable preview, explicit same-server embedded-image load; bounded normalization/cache |
+| Images | Native raster paste, thumbnails and explicit same-server full viewer with Fit/zoom/scroll/Save PNG; bounded normalization/cache |
+| Avatars | Explicit same-server/inline preview and session display, 32×128px thumbnails; confirmed normalized upload through /avatar; foreign origins blocked |
 | Drag/drop and clipboard files | Bounded explicit staging; real URI-list clipboard tested, platform-dispatched drop tested; actual file-manager drop still unverified |
 | Connection recovery | Heartbeat, bounded channels, backoff and explicit status/error states |
 | Conversation search | Ctrl+F, result count, Enter/F3/Shift+F3, focused match; retained current-room text only |

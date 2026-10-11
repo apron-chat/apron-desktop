@@ -9,6 +9,7 @@ pub enum Kind {
     AddMember,
     RemoveMember,
     Leave,
+    Kick,
 }
 impl Kind {
     pub fn title(self) -> &'static str {
@@ -19,6 +20,7 @@ impl Kind {
             Self::AddMember => "Add member",
             Self::RemoveMember => "Remove member",
             Self::Leave => "Leave room",
+            Self::Kick => "Remove with reason",
         }
     }
     pub fn room_form(self) -> bool {
@@ -36,6 +38,27 @@ impl Kind {
             self == Self::Create || !id.is_empty(),
             "Choose a room first"
         );
+        if self == Self::Kick {
+            let user = user.trim();
+            let reason = description.trim();
+            ensure!(
+                !user.is_empty()
+                    && user.len() <= 128
+                    && crate::model::clean(user, 128) == user
+                    && !user.chars().any(|c| c.is_whitespace() || c.is_control()),
+                "Enter one exact user ID without whitespace"
+            );
+            ensure!(
+                reason.chars().count() <= 200
+                    && !reason.chars().any(|c| c.is_control()
+                        || matches!(c,'\u{202a}'..='\u{202e}'|'\u{2066}'..='\u{2069}')),
+                "Reason must be one plain line, at most 200 characters"
+            );
+            return Ok((
+                "command",
+                json!({"room_id":id,"body":{"text":format!("/kick @{user} {reason}"),"mentions":[user]}}),
+            ));
+        }
         if self.room_form() {
             ensure!(
                 !title.trim().is_empty()
@@ -96,5 +119,31 @@ mod tests {
         let (method, params) = Kind::RemoveMember.request(&room, "", "", "alice").unwrap();
         assert_eq!(method, "room_leave");
         assert_eq!(params["user_id"], "alice");
+    }
+}
+
+#[cfg(test)]
+mod moderation_tests {
+    use super::*;
+    #[test]
+    fn kick_has_exact_scope_and_one_explicit_mention() {
+        let room = json!({"room_id":"r"});
+        let (method, p) = Kind::Kick
+            .request(&room, "", "Repeated spam", "user_17")
+            .unwrap();
+        assert_eq!(method, "command");
+        assert_eq!(p["room_id"], "r");
+        assert_eq!(p["body"]["mentions"], json!(["user_17"]));
+        assert_eq!(p["body"]["text"], "/kick @user_17 Repeated spam");
+        for target in ["", "a b", "a\nb"] {
+            assert!(Kind::Kick.request(&room, "", "reason", target).is_err());
+        }
+        for reason in [
+            "two\nlines".to_string(),
+            "x".repeat(201),
+            "\u{202e}hidden".to_string(),
+        ] {
+            assert!(Kind::Kick.request(&room, "", &reason, "u").is_err());
+        }
     }
 }
