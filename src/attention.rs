@@ -12,6 +12,7 @@ struct Room {
 #[derive(Default)]
 pub struct Attention {
     rooms: BTreeMap<String, Room>,
+    evidence: BTreeMap<String, BTreeMap<u64, (u64, bool)>>,
 }
 impl Attention {
     pub fn receive(
@@ -110,6 +111,15 @@ impl Attention {
         }
         let read = state.read;
         for m in messages {
+            if self
+                .evidence
+                .get(room)
+                .and_then(|v| v.get(&m.id))
+                .is_some_and(|(log, _)| *log > m.log)
+            {
+                continue;
+            }
+
             let own = m.raw["from"]["user_id"] == you;
             if m.deleted() || own {
                 self.remove(room, m.id);
@@ -118,8 +128,12 @@ impl Attention {
             let mentioned = m.raw["body"]["mentions"]
                 .as_array()
                 .is_some_and(|v| v.iter().any(|u| u == you));
+            let added = self.remember(room, m.id, m.log, mentioned);
             // This is a snapshot of an unread message, including older fetched pages.
             if m.id <= read {
+                if added {
+                    self.receive(room, m.id, false, true, true);
+                }
                 if !mentioned {
                     self.remove(room, m.id);
                 }
@@ -127,6 +141,57 @@ impl Attention {
             }
             self.receive(room, m.id, false, mentioned, true);
         }
+    }
+    pub fn pending(&self) -> BTreeMap<String, BTreeMap<u64, bool>> {
+        self.rooms
+            .iter()
+            .filter(|(_, r)| !r.pending.is_empty())
+            .map(|(room, r)| (room.clone(), r.pending.clone()))
+            .collect()
+    }
+    pub fn restore_pending(&mut self, pending: &BTreeMap<String, BTreeMap<u64, bool>>) {
+        if pending.len() > ROOMS || pending.values().map(BTreeMap::len).sum::<usize>() > PENDING {
+            return;
+        }
+        for (room, entries) in pending {
+            if room.len() <= 256 && (self.rooms.len() < ROOMS || self.rooms.contains_key(room)) {
+                self.rooms.entry(room.clone()).or_default().pending = entries.clone();
+            }
+        }
+    }
+    pub fn evidence(&self) -> BTreeMap<String, BTreeMap<u64, (u64, bool)>> {
+        self.evidence.clone()
+    }
+    pub fn restore_evidence(&mut self, value: BTreeMap<String, BTreeMap<u64, (u64, bool)>>) {
+        if value.len() <= ROOMS && value.values().map(BTreeMap::len).sum::<usize>() <= PENDING {
+            self.evidence = value;
+        }
+    }
+    fn remember(&mut self, room: &str, id: u64, log: u64, mentioned: bool) -> bool {
+        let entries = self.evidence.entry(room.to_owned()).or_default();
+        let old = entries.get(&id).copied();
+        if old.is_some_and(|(prev, _)| prev >= log) {
+            return false;
+        }
+        entries.insert(id, (log, mentioned));
+        let added = old.is_some_and(|(_, was)| !was && mentioned);
+        while self.evidence.values().map(BTreeMap::len).sum::<usize>() > PENDING {
+            let oldest = self
+                .evidence
+                .iter()
+                .flat_map(|(r, entries)| {
+                    entries
+                        .iter()
+                        .map(move |(id, (log, _))| (r.clone(), *id, *log))
+                })
+                .min_by_key(|v| v.2);
+            if let Some((r, id, _)) = oldest {
+                self.evidence.get_mut(&r).unwrap().remove(&id);
+            } else {
+                break;
+            }
+        }
+        added
     }
     pub fn counts(&self, room: &str) -> (usize, usize) {
         self.rooms
@@ -190,6 +255,29 @@ mod tests {
         restored.mark_read("r", 4);
         restored.history("r", &store.rows("r"), "you");
         assert_eq!(restored.counts("r"), (0, 0));
+    }
+    #[test]
+    fn saved_evidence_recovers_old_edit_mentions_once() {
+        use crate::model::Message;
+        let msg = |log, mentions| {
+            std::sync::Arc::new(Message::parse(serde_json::json!({"message_id":"10","log_id":log,"room_id":"r","from":{"user_id":"other"},"body":{"mentions":mentions}})).unwrap())
+        };
+        let mut a = Attention::default();
+        a.history("r", &[msg("10", serde_json::json!([]))], "you");
+        let mut b = Attention::default();
+        b.restore(&a.cursors());
+        b.restore_evidence(a.evidence());
+        b.history("r", &[msg("20", serde_json::json!(["you"]))], "you");
+        assert_eq!(b.counts("r"), (1, 1));
+        let mut restarted = Attention::default();
+        restarted.restore(&b.cursors());
+        restarted.restore_evidence(b.evidence());
+        restarted.restore_pending(&b.pending());
+        restarted.history("r", &[msg("20", serde_json::json!(["you"]))], "you");
+        assert_eq!(restarted.counts("r"), (1, 1));
+        b.mark_read("r", 10);
+        b.history("r", &[msg("20", serde_json::json!(["you"]))], "you");
+        assert_eq!(b.counts("r"), (0, 0));
     }
     #[test]
     fn memory_is_bounded() {

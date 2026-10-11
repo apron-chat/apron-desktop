@@ -80,7 +80,7 @@ impl Conversation {
                     }),
             )
             .child(
-                Button::new("previous-match")
+                crate::design::button("previous-match")
                     .ghost()
                     .small()
                     .icon(IconName::ChevronUp)
@@ -90,7 +90,7 @@ impl Conversation {
                     .on_click(cx.listener(|v, _, _, cx| v.step_match(false, cx))),
             )
             .child(
-                Button::new("next-match")
+                crate::design::button("next-match")
                     .ghost()
                     .small()
                     .icon(IconName::ChevronDown)
@@ -100,7 +100,7 @@ impl Conversation {
                     .on_click(cx.listener(|v, _, _, cx| v.step_match(true, cx))),
             )
             .child(
-                Button::new("close-search")
+                crate::design::button("close-search")
                     .ghost()
                     .small()
                     .icon(IconName::Close)
@@ -127,20 +127,13 @@ impl Conversation {
         if !self.can_react(id) {
             return;
         }
-        let mut emojis = self.reactions.own(id, &self.you);
-        if !emojis.remove(emoji) {
-            if emojis.len() >= 16 {
-                self.error = "Remove a reaction before adding another.".into();
-                cx.notify();
-                return;
-            }
-            emojis.insert(emoji.into());
-        }
         if self.command(
             Command::React {
                 generation: self.generation,
                 message: id,
-                emojis: emojis.into_iter().collect(),
+                room: self.room.clone(),
+                user: self.you.clone(),
+                emoji: emoji.to_owned(),
             },
             cx,
         ) {
@@ -159,7 +152,7 @@ impl Conversation {
                 |(i, (emoji, count))| {
                     let selected = own.contains(&emoji);
                     let owner = owner.clone();
-                    Button::new(("reaction", i))
+                    crate::design::button(("reaction", i))
                         .outline()
                         .xsmall()
                         .rounded_full()

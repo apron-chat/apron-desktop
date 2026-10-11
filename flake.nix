@@ -4,6 +4,12 @@
   outputs = { nixpkgs, ... }: let
     systems = [ "x86_64-linux" "aarch64-linux" ];
   in {
+    packages = nixpkgs.lib.genAttrs systems (system: let pkgs = nixpkgs.legacyPackages.${system}; in {
+      default = import ./nix/package.nix { inherit pkgs; };
+    });
+    apps = nixpkgs.lib.genAttrs systems (system: {
+      default = { type = "app"; program = "${(import ./nix/package.nix { pkgs = nixpkgs.legacyPackages.${system}; })}/bin/apron-gpui"; };
+    });
     devShells = nixpkgs.lib.genAttrs systems (system: let
       pkgs = nixpkgs.legacyPackages.${system};
       libraries = with pkgs; [ fontconfig freetype wayland libxkbcommon vulkan-loader mesa openssl

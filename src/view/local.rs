@@ -23,6 +23,8 @@ impl Conversation {
                 .collect(),
             drafts,
             reads: self.attention.cursors(),
+            attention_evidence: self.attention.evidence(),
+            attention_pending: self.attention.pending(),
         }
     }
     pub(crate) fn schedule_local(&mut self, cx: &mut Context<Self>) {
@@ -102,6 +104,9 @@ impl Conversation {
                 if let Ok(Ok(Some(state))) = &result {
                     this.local_enabled = true;
                     this.attention.restore(&state.reads);
+                    this.attention.restore_pending(&state.attention_pending);
+                    this.attention
+                        .restore_evidence(state.attention_evidence.clone());
                     for (room, draft) in &state.drafts {
                         if !this.local_touched.contains(room) {
                             this.drafts.insert(room.clone(), draft.clone());
@@ -130,11 +135,29 @@ impl Conversation {
                     this.local_error = e;
                 }
                 this.local_loading = false;
+                this.recover_attention(cx);
                 this.reconcile_attention(w, cx, true);
                 cx.notify();
             });
         })
         .detach();
+    }
+    pub(crate) fn recover_attention(&mut self, cx: &mut Context<Self>) {
+        let cursors = self
+            .attention
+            .cursors()
+            .into_iter()
+            .filter(|(r, read)| {
+                *read > 0 && self.rooms.get(r).is_some_and(|r| r["_joined"] == true)
+            })
+            .collect();
+        self.command(
+            Command::Recover {
+                epoch: self.local_epoch,
+                cursors,
+            },
+            cx,
+        );
     }
     pub(crate) fn reconcile_attention(
         &mut self,
@@ -267,16 +290,16 @@ impl Render for PrivacyForm {
         let toggle = owner.clone();
         let reset = owner.clone();
         div().flex().flex_col().gap_4()
-   .child(div().text_sm().child("Save drafts and read cursors for this server and user on this device. Tokens, message history and attachments are never saved."))
+   .child(div().text_sm().child("Save drafts, read cursors and bounded attention IDs/mention flags for this server and user. This profile never stores tokens, message bodies or attachments."))
    .child(div().text_sm().text_color(cx.theme().muted_foreground).child("Draft text is stored unencrypted in a private file under XDG_STATE_HOME/apron-gpui. Up to 256 rooms, 256 KiB of drafts, 512 KiB per profile and 16 profiles. Sign in again as the same user to restore it."))
    .child(div().text_sm().child(status))
    .when(!self.confirm,|d|d.child(div().flex().flex_wrap().gap_2()
-    .child(Button::new("local-toggle").label(if enabled{"Disable and erase saved copy"}else{"Enable local storage"}).disabled(unavailable).on_click(move|_,w,cx|toggle.update(cx,|v,cx|if enabled{v.forget_local(false,w,cx)}else{v.enable_local(cx)})))
-    .child(Button::new("local-reset").label("Reset this profile…").disabled(unavailable||busy).on_click(cx.listener(|this,_,_,cx|{this.confirm=true;cx.notify();})))) )
+    .child(crate::design::button("local-toggle").label(if enabled{"Disable and erase saved copy"}else{"Enable local storage"}).disabled(unavailable).on_click(move|_,w,cx|toggle.update(cx,|v,cx|if enabled{v.forget_local(false,w,cx)}else{v.enable_local(cx)})))
+    .child(crate::design::button("local-reset").label("Reset this profile…").disabled(unavailable||busy).on_click(cx.listener(|this,_,_,cx|{this.confirm=true;cx.notify();})))) )
    .when(self.confirm,|d|d.child(div().flex().flex_col().gap_2().child("Erase saved drafts and read cursors, clear this session’s drafts and selected files, and turn storage off? Messages on the server and your sign-in are unchanged.")
-    .child(div().flex().gap_2().child(Button::new("cancel-reset").label("Cancel").on_click(cx.listener(|this,_,_,cx|{this.confirm=false;cx.notify();})))
-    .child(Button::new("confirm-reset").label("Erase local data").on_click(cx.listener(move|this,_,w,cx|{reset.update(cx,|v,cx|v.forget_local(true,w,cx));this.confirm=false;cx.notify();}))))))
-   .child(div().flex().justify_end().child(Button::new("close-local").label("Done").on_click(|_,w,cx|w.close_dialog(cx))))
+    .child(div().flex().gap_2().child(crate::design::button("cancel-reset").label("Cancel").on_click(cx.listener(|this,_,_,cx|{this.confirm=false;cx.notify();})))
+    .child(crate::design::button("confirm-reset").label("Erase local data").on_click(cx.listener(move|this,_,w,cx|{reset.update(cx,|v,cx|v.forget_local(true,w,cx));this.confirm=false;cx.notify();}))))))
+   .child(div().flex().justify_end().child(crate::design::button("close-local").label("Done").on_click(|_,w,cx|w.close_dialog(cx))))
    .into_any_element()
     }
 }

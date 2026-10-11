@@ -371,3 +371,49 @@ async fn official_reactions_replace_remove_and_reconcile_history() {
     }
     assert!(state.totals(number(&mid).unwrap()).is_empty());
 }
+
+#[tokio::test]
+#[ignore = "requires the dedicated official loopback Apron server"]
+async fn official_room_forms_create_thread_edit_and_leave() {
+    use apron_gpui::workflows::Kind;
+    let mut c = Client::connect(OFFICIAL, None).await.unwrap();
+    c.guest().await.unwrap();
+    let (method, params) = Kind::Create
+        .request(&json!({}), "Synthetic forms", "Original description", "")
+        .unwrap();
+    let created = c.rpc(method, params).await.unwrap();
+    let room = json!({"room_id":created["room_id"]});
+    let (method, params) = Kind::Thread
+        .request(&room, "Synthetic thread", "Thread summary", "")
+        .unwrap();
+    let thread = c.rpc(method, params).await.unwrap();
+    let (method, params) = Kind::Settings
+        .request(&room, "Renamed synthetic room", "Updated description", "")
+        .unwrap();
+    c.rpc(method, params).await.unwrap();
+    let list = c
+        .rpc("room_list", json!({"filter":"joined","members":true}))
+        .await
+        .unwrap();
+    assert!(
+        list["joined"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["room_id"] == created["room_id"] && r["title"] == "Renamed synthetic room")
+    );
+    assert!(list["joined"].as_array().unwrap().iter().any(|r|r["room_id"]==thread["room_id"] && r["parent_room_id"]==created["room_id"]));
+    let (method, params) = Kind::Leave.request(&room, "", "", "").unwrap();
+    c.rpc(method, params).await.unwrap();
+    let list = c
+        .rpc("room_list", json!({"filter":"joined"}))
+        .await
+        .unwrap();
+    assert!(
+        !list["joined"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["room_id"] == created["room_id"])
+    );
+}

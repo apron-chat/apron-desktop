@@ -54,6 +54,21 @@ fn main() {
             gpui_kit::init(cx);
             crate::design::apply(cx);
             cx.bind_keys([
+                KeyBinding::new(
+                    "down",
+                    view::switcher::SwitchNext,
+                    Some("RoomSwitcher > Input"),
+                ),
+                KeyBinding::new(
+                    "up",
+                    view::switcher::SwitchPrevious,
+                    Some("RoomSwitcher > Input"),
+                ),
+                KeyBinding::new(
+                    "enter",
+                    view::switcher::SwitchAccept,
+                    Some("RoomSwitcher > Input"),
+                ),
                 KeyBinding::new("ctrl-f", view::FindMessages, Some("Apron")),
                 KeyBinding::new("ctrl-f", view::FindMessages, Some("Apron > Input")),
                 KeyBinding::new("f3", view::NextMatch, Some("Apron")),

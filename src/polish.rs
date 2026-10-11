@@ -63,6 +63,20 @@ async fn run(view: WeakEntity<Conversation>, output: String, cx: &mut AsyncWindo
     .await;
     settle(cx).await;
     stage(&output, "wide", cx).await;
+    cx.update(crate::design::gallery).unwrap();
+    settle(cx).await;
+    stage(&output, "gallery", cx).await;
+    cx.update(|w, cx| key("escape", w, cx)).unwrap();
+    settle(cx).await;
+    view.update_in(cx, |v, w, cx| {
+        v.manage_dialog(apron_gpui::workflows::Kind::Create, w, cx)
+    })
+    .unwrap();
+    settle(cx).await;
+    stage(&output, "create-room", cx).await;
+    cx.update(|w, cx| key("escape", w, cx)).unwrap();
+    settle(cx).await;
+
     view.update_in(cx, |v, w, cx| v.composer.update(cx, |s, cx| s.focus(w, cx)))
         .unwrap();
     cx.update(|w, cx| key("ctrl-f", w, cx)).unwrap();
@@ -161,7 +175,7 @@ async fn run(view: WeakEntity<Conversation>, output: String, cx: &mut AsyncWindo
         .update_in(cx, |v, _, _| *v.geometry.borrow().get(&id).unwrap())
         .unwrap();
     right_click(bounds.origin + point(px(30.), px(8.)), cx).await;
-    for k in ["down", "down", "down", "right", "enter"] {
+    for k in ["down", "down", "down", "down", "right", "enter"] {
         cx.update(|w, cx| key(k, w, cx)).unwrap();
     }
     wait(&view, cx, |v, _| !v.reactions.totals(id).is_empty()).await;
@@ -194,6 +208,40 @@ async fn run(view: WeakEntity<Conversation>, output: String, cx: &mut AsyncWindo
     stage(&output, "partial-before-focus", cx).await;
     cx.update(|w, cx| key("ctrl-k", w, cx)).unwrap();
     settle(cx).await;
+    assert!(
+        cx.update(|w, cx| {
+            use gpui_kit::component::WindowExt;
+            w.has_active_dialog(cx)
+        })
+        .unwrap()
+    );
+    stage(&output, "switcher", cx).await;
+    let switcher = view
+        .update_in(cx, |v, _, _cx| {
+            v.switcher_form.as_ref().unwrap().upgrade().unwrap()
+        })
+        .unwrap();
+    cx.update(|w, cx| {
+        switcher.update(cx, |v, cx| {
+            v.input.update(cx, |s, cx| s.set_value("eng", w, cx))
+        })
+    })
+    .unwrap();
+    settle(cx).await;
+    assert_eq!(
+        cx.update(|_, cx| switcher.read(cx).results(cx)[0].0.clone())
+            .unwrap(),
+        "engineering"
+    );
+    cx.update(|w, cx| key("escape", w, cx)).unwrap();
+    settle(cx).await;
+    if !view.update_in(cx, |v, w, _| v.sidebar_visible(w)).unwrap() {
+        cx.update(|w, cx| key("ctrl-b", w, cx)).unwrap();
+        settle(cx).await;
+    }
+    view.update_in(cx, |v, w, cx| v.filter.update(cx, |s, cx| s.focus(w, cx)))
+        .unwrap();
+
     view.update_in(cx, |v, _, _| *v.focused_row.borrow_mut() = None)
         .unwrap();
     let mut reached_message = false;
@@ -227,7 +275,8 @@ async fn run(view: WeakEntity<Conversation>, output: String, cx: &mut AsyncWindo
     );
     cx.update(|w, cx| key("escape", w, cx)).unwrap();
     settle(cx).await;
-    cx.update(|w, cx| key("ctrl-k", w, cx)).unwrap();
+    view.update_in(cx, |v, w, cx| v.filter.update(cx, |s, cx| s.focus(w, cx)))
+        .unwrap();
     settle(cx).await;
     view.update_in(cx, |v, w, cx| {
         assert!(v.sidebar_visible(w));
@@ -380,11 +429,16 @@ async fn run(view: WeakEntity<Conversation>, output: String, cx: &mut AsyncWindo
     .unwrap();
     settle(cx).await;
     stage(&output, "dark", cx).await;
+    cx.update(crate::design::gallery).unwrap();
+    settle(cx).await;
+    stage(&output, "gallery-dark", cx).await;
+    cx.update(|w, cx| key("escape", w, cx)).unwrap();
+    settle(cx).await;
     cx.update(|_, cx| gpui_kit::component::Theme::update(cx, |theme| theme.font_size = px(20.)))
         .unwrap();
     settle(cx).await;
     stage(&output, "large-text", cx).await;
-    let report = serde_json::json!({"loaded_search_keyboard":true,"reaction_menu_add_remove":true,"native_wayland":true,"context_menu_reply_target":true,"context_menu_copy":true,"keyboard_menu_navigation":true,"toolbar_session_menu":true,"tab_reaches_message_actions":true,"keyboard_only_reply":true,"escape_cancels_reply":true,"ctrl_k_focuses_room_filter":true,"background_unread_mention":true,"history_reading_preserves_unread":true,"keyboard_mark_read":true,"escape_dismisses_masked_token_dialog":true,"rejected_token_error":true,"valid_token_session":true,"synthetic_data_only":true});
+    let report = serde_json::json!({"loaded_search_keyboard":true,"reaction_menu_add_remove":true,"native_wayland":true,"context_menu_reply_target":true,"context_menu_copy":true,"keyboard_menu_navigation":true,"toolbar_session_menu":true,"tab_reaches_message_actions":true,"keyboard_only_reply":true,"escape_cancels_reply":true,"ctrl_k_fuzzy_switcher":true,"background_unread_mention":true,"history_reading_preserves_unread":true,"keyboard_mark_read":true,"escape_dismisses_masked_token_dialog":true,"rejected_token_error":true,"valid_token_session":true,"synthetic_data_only":true});
     std::fs::write(&output, serde_json::to_string_pretty(&report).unwrap()).unwrap();
     cx.update(|_, cx| cx.quit()).unwrap();
 }

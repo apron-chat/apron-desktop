@@ -1,10 +1,15 @@
 pub(crate) mod daily;
 mod discover;
 mod edit;
+mod email;
 mod focus;
 mod images;
+mod links;
 mod local;
+mod manage;
 mod mentions;
+mod presence;
+pub(crate) mod switcher;
 use apron_gpui::{
     attention::Attention,
     auth::Secret,
@@ -15,7 +20,7 @@ use apron_gpui::{
 pub(crate) use edit::SaveEdit;
 use gpui_kit::component::{
     ActiveTheme, Disableable, IconName, Selectable, Sizable, WindowExt,
-    button::{Button, ButtonVariants},
+    button::ButtonVariants,
     input::{Input, InputEvent, InputState, Textarea, TextareaState},
     menu::{ContextMenuExt, DropdownMenu, PopupMenu},
     message_scroller::{MessageScroller, MessageScrollerState},
@@ -35,9 +40,11 @@ actions!(
         ToggleRooms,
         ReplyMessage,
         CopyMessage,
+        OpenLinks,
         FindRoom,
         MarkRead,
         OpenSession,
+        OpenEmail,
         ShowHelp,
         OpenPrivacy,
         EditMessage,
@@ -51,6 +58,18 @@ actions!(
         NextMatch,
         PreviousMatch,
         ToggleTheme,
+        ShowGallery,
+        ToggleNotifications,
+        ToggleMute,
+        PresenceOnline,
+        PresenceNone,
+        CreateRoom,
+        CreateThread,
+        RoomSettings,
+        AddMember,
+        RemoveMember,
+        LeaveRoom,
+        ShowMembers,
         ReactLike,
         ReactHeart,
         ReactCelebrate,
@@ -78,8 +97,19 @@ pub struct Conversation {
     local_touched: std::collections::BTreeSet<String>,
     mutation: Option<WeakEntity<edit::MutationForm>>,
     mutation_serial: u64,
+    pub(crate) manage_form: Option<WeakEntity<manage::ManageForm>>,
+    pub(crate) switcher_form: Option<WeakEntity<switcher::Switcher>>,
     mutation_pending: Option<u64>,
+    manage_pending: Option<u64>,
+    own_status: String,
+    notifications: bool,
+    last_notification: Option<std::time::Instant>,
+    last_typing: Option<std::time::Instant>,
+    typing: BTreeMap<(String, String), std::time::Instant>,
+    typing_timer: Option<Task<()>>,
+    mutes: BTreeMap<String, Option<std::time::Instant>>,
     server: String,
+    pub(crate) remember_session: bool,
     pub(crate) authenticated: bool,
     pub(crate) attention: Attention,
     pub(crate) filter: Entity<InputState>,
@@ -118,6 +148,7 @@ pub struct Conversation {
     transfer: String,
     transfer_busy: bool,
     sidebar: Option<bool>,
+    collapsed: std::collections::BTreeSet<String>,
     open_message: Option<u64>,
     conversation_menu_open: bool,
     pub(crate) rendered_rows: std::cell::Cell<usize>,
@@ -136,7 +167,7 @@ impl Conversation {
         let composer = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .placeholder("Write a message…")
-                .auto_grow(2, 5)
+                .auto_grow(1, 5)
         });
         let filter = cx.new(|cx| InputState::new(window, cx).placeholder("Find a room…"));
         let search =
@@ -174,6 +205,7 @@ impl Conversation {
                 this.send(window, cx);
             }
             if matches!(event, InputEvent::Change) {
+                this.activity_changed(cx);
                 this.draft_revision += 1;
                 this.local_touched.insert(this.room.clone());
                 if !this.room.is_empty() {
@@ -249,8 +281,19 @@ impl Conversation {
             local_touched: Default::default(),
             mutation: None,
             mutation_serial: 0,
+            manage_form: None,
+            switcher_form: None,
             mutation_pending: None,
+            manage_pending: None,
+            own_status: String::new(),
+            notifications: false,
+            last_notification: None,
+            last_typing: None,
+            typing: Default::default(),
+            typing_timer: None,
+            mutes: Default::default(),
             server: url,
+            remember_session: false,
             authenticated: false,
             attention: Attention::default(),
             search,
@@ -289,6 +332,7 @@ impl Conversation {
             transfer: String::new(),
             transfer_busy: false,
             sidebar: None,
+            collapsed: Default::default(),
             open_message: None,
             conversation_menu_open: false,
             rendered_rows: std::cell::Cell::new(0),
@@ -342,18 +386,36 @@ impl Conversation {
             cx.notify();
         }
     }
+    pub(crate) fn connect_to(
+        &mut self,
+        server: String,
+        token: Option<Secret>,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.can_change_session() || apron_gpui::media::endpoint(&server).is_err() {
+            return;
+        }
+        self.flush_local(cx);
+        self.server = server;
+        self.change_session(token, w, cx);
+    }
     pub(crate) fn change_session(
         &mut self,
         token: Option<Secret>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.pending || self.transfer_busy || self.mutation_pending.is_some() {
+        if !self.can_change_session() {
             self.error =
                 "Finish the current send or cancel the transfer before changing sessions.".into();
             cx.notify();
             return;
         }
+        self.stop_typing();
+        self.typing.clear();
+        self.typing_timer = None;
+        self.mutes.clear();
         self.flush_local(cx);
         self.local_save = None;
         self.local_epoch += 1;
@@ -362,14 +424,15 @@ impl Conversation {
         self.local_loading = false;
         self.draft_revision = 0;
         self.local_touched.clear();
-        let bridge = match Bridge::start_with_token(self.server.clone(), token) {
-            Ok(b) => b,
-            Err(_) => {
-                self.error = "Could not start the session.".into();
-                cx.notify();
-                return;
-            }
-        };
+        let bridge =
+            match Bridge::start_with_storage(self.server.clone(), token, self.remember_session) {
+                Ok(b) => b,
+                Err(_) => {
+                    self.error = "Could not start the session.".into();
+                    cx.notify();
+                    return;
+                }
+            };
         let events = bridge.events.clone();
         self.bridge = bridge;
         self._events = cx.spawn_in(window, async move |this, cx| {
@@ -413,7 +476,11 @@ impl Conversation {
         cx.notify();
     }
     pub(crate) fn can_change_session(&self) -> bool {
-        !self.pending && !self.transfer_busy && self.mutation_pending.is_none()
+        !self.pending
+            && !self.transfer_busy
+            && self.mutation_pending.is_none()
+            && self.manage_pending.is_none()
+            && self.reacting.is_none()
     }
     pub(crate) fn session_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if window.has_active_dialog(cx) {
@@ -423,11 +490,12 @@ impl Conversation {
         let server = self.server.clone();
         let form = cx.new(|cx| crate::session::SessionForm::new(owner, server, window, cx));
         self.session_form = Some(form.downgrade());
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, _, cx| {
             let clear = form.clone();
             dialog
                 .title("Sign in to Apron")
                 .child(form.clone())
+                .footer(form.update(cx, |f, cx| f.actions(cx)))
                 .on_close(move |_, window, cx| clear.update(cx, |f, cx| f.clear(window, cx)))
         });
     }
@@ -467,6 +535,7 @@ impl Conversation {
             self.drafts.pop_first();
         }
         self.schedule_local(cx);
+        self.stop_typing();
         self.anchor_unread = true;
         self.mention_index = 0;
         self.reacting = None;
@@ -492,6 +561,9 @@ impl Conversation {
         self.scroller
             .update(cx, |s, cx| s.reset(self.rows.len(), cx));
         self.history(None, cx);
+        if window.viewport_size().width < px(crate::design::COMPACT) {
+            self.sidebar = None;
+        }
         cx.notify();
     }
     fn history(&mut self, before: Option<u64>, cx: &mut Context<Self>) {
@@ -548,6 +620,54 @@ impl Conversation {
     }
     pub(crate) fn event(&mut self, event: Event, window: &mut Window, cx: &mut Context<Self>) {
         match event {
+            Event::Identity(you) => {
+                self.own_status = model::clean(model::text(&you["status"]), 40);
+            }
+            Event::Managed { operation, result } => {
+                if self.manage_pending == Some(operation) {
+                    self.manage_pending = None;
+                }
+                if let Ok(value) = &result
+                    && let Some(room) = value["room_id"].as_str()
+                    && self.rooms.contains_key(room)
+                    && room != self.room
+                {
+                    self.select(room.to_owned(), window, cx);
+                }
+
+                if let Some(form) = self.manage_form.as_ref().and_then(|f| f.upgrade()) {
+                    form.update(cx, |f, cx| f.finish(operation, result.clone(), window, cx));
+                }
+                if let Ok(value) = &result
+                    && value["you"].is_object()
+                {
+                    self.own_status = model::clean(model::text(&value["you"]["status"]), 40);
+                }
+                if let Err(e) = result {
+                    self.error = e;
+                }
+            }
+
+            Event::RecoveryGap { epoch, message } => {
+                if epoch == self.local_epoch {
+                    self.error = message;
+                }
+            }
+            Event::Recovered { epoch, room, page } => {
+                if epoch != self.local_epoch {
+                    return;
+                }
+                let rows = page["messages"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|v| Message::parse(v.clone()).map(Arc::new))
+                    .filter(|m| m.room == room)
+                    .collect::<Vec<_>>();
+                self.attention.history(&room, &rows, &self.you);
+                self.schedule_local(cx);
+            }
+
             Event::Reacted {
                 generation,
                 message,
@@ -575,12 +695,30 @@ impl Conversation {
             }
 
             Event::State(s) => {
+                if let Some(op) = self.manage_pending.take()
+                    && let Some(form) = self.manage_form.as_ref().and_then(|f| f.upgrade())
+                {
+                    form.update(cx,|f,cx|f.finish(op,Err("Connection changed; completion is uncertain. Inspect the room before retrying.".into()),window,cx));
+                }
+
                 if let Some(operation) = self.mutation_pending.take()
                     && let Some(form) = self.mutation.as_ref().and_then(|f| f.upgrade())
                 {
                     form.update(cx,|f,cx|f.finished(operation,Err("Connection changed; completion may be uncertain. Inspect the message before retrying.".into()),window,cx));
                 }
                 self.reacting = None;
+                self.typing.clear();
+                self.typing_timer = None;
+                self.last_typing = None;
+                if s == "Connecting…" {
+                    self.mutes.clear();
+                    self.own_status.clear();
+                    for user in self.users.values_mut() {
+                        if let Some(o) = user.as_object_mut() {
+                            o.remove("status");
+                        }
+                    }
+                }
                 self.status = s;
                 self.ready = false;
                 self.loading = false;
@@ -616,10 +754,17 @@ impl Conversation {
                     self.rooms.keys().next().cloned().unwrap_or_default()
                 };
                 self.select(room, window, cx);
+                if !self.local_loading {
+                    self.recover_attention(cx);
+                }
             }
             Event::Notice(frame) => match frame["method"].as_str() {
                 Some("message") => {
                     let raw = &frame["params"];
+                    self.typing.remove(&(
+                        model::text(&raw["room_id"]).to_owned(),
+                        model::text(&raw["from"]["user_id"]).to_owned(),
+                    ));
                     let id = model::number(&raw["message_id"]);
                     let old = id.and_then(|id| self.store.get(id)).cloned();
                     if self.store.apply(raw.clone()) {
@@ -640,6 +785,9 @@ impl Conversation {
                             if message.deleted() {
                                 self.attention.remove(&message.room, message.id);
                             } else {
+                                if old.is_none() && raw["from"]["user_id"] != self.you {
+                                    self.notify_message(&message.room, window, cx);
+                                }
                                 self.attention.receive(
                                     &message.room,
                                     message.id,
@@ -649,9 +797,35 @@ impl Conversation {
                                 );
                             }
                         }
+                        if let Some(message) = id.and_then(|id| self.store.get(id)).cloned() {
+                            self.attention.history(
+                                &message.room,
+                                std::slice::from_ref(&message),
+                                &self.you,
+                            );
+                        }
+                        self.schedule_local(cx);
                         self.refresh(cx);
                         self.read_visible(window, cx);
                     }
+                }
+                Some("status") => self.status_notice(&frame["params"]),
+                Some("user") => {
+                    if frame["params"]["you"].is_object() {
+                        self.own_status =
+                            model::clean(model::text(&frame["params"]["you"]["status"]), 40);
+                    }
+                    let user = &frame["params"]["new"];
+                    let id = model::text(&user["user_id"]);
+                    if !id.is_empty()
+                        && id.len() <= 128
+                        && (self.users.len() < 1024 || self.users.contains_key(id))
+                    {
+                        self.users.insert(id.into(), user.clone());
+                    }
+                }
+                Some("activity") if frame["params"]["from"]["user_id"] != self.you => {
+                    self.receive_activity(&frame["params"], cx)
                 }
                 Some("reactions") => {
                     self.reactions.apply(&frame["params"]);
@@ -814,6 +988,7 @@ impl Conversation {
             },
             cx,
         ) {
+            self.stop_typing();
             self.pending = true;
             self.error.clear();
             cx.notify();
@@ -983,6 +1158,12 @@ impl Conversation {
             .on_action(move |_: &ReplyMessage, window, cx| {
                 let _ = reply_owner.update(cx, |v, cx| v.begin_reply(id, window, cx));
             })
+            .on_action({
+                let owner = owner.clone();
+                move |_: &OpenLinks, w, cx| {
+                    let _ = owner.update(cx, |v, cx| v.links_dialog(id, w, cx));
+                }
+            })
             .on_action(move |_: &EditMessage, w, cx| {
                 let _ = edit_owner.update(cx, |v, cx| v.open_mutation(id, false, w, cx));
             })
@@ -1081,7 +1262,7 @@ impl Conversation {
                     })
                     .child(div().flex_1())
                     .child(
-                        Button::new(("message-actions", id))
+                        crate::design::button(("message-actions", id))
                             .ghost()
                             .absolute()
                             .right_1()
@@ -1153,7 +1334,7 @@ impl Conversation {
                         row = row.child(Self::embedded_image(id, ix, url, &owner, cx));
                     }
                     row = row.child(
-                        Button::new(SharedString::from(format!("save-{id}-{ix}")))
+                        crate::design::button(SharedString::from(format!("save-{id}-{ix}")))
                             .self_start()
                             .outline()
                             .small()
@@ -1192,6 +1373,7 @@ impl Conversation {
         let can_react = owner.upgrade().is_some_and(|v| v.read(cx).can_react(id));
         menu.menu_with_disabled("Reply", Box::new(ReplyMessage), !can_reply)
             .menu("Copy message", Box::new(CopyMessage))
+            .menu("Open external links…", Box::new(OpenLinks))
             .when(can_react, |m| {
                 m.submenu("React…", w, cx, |m, _, _| {
                     m.menu("👍  Like", Box::new(ReactLike))
@@ -1208,7 +1390,7 @@ impl Conversation {
     }
     fn navigation(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut pane = div()
-            .w_64()
+            .w(px(crate::design::SIDEBAR))
             .min_w_48()
             .h_full()
             .flex_shrink_0()
@@ -1274,7 +1456,7 @@ impl Conversation {
                 .flex()
                 .gap_2()
                 .child(
-                    Button::new("all-rooms")
+                    crate::design::button("all-rooms")
                         .ghost()
                         .small()
                         .label("All rooms")
@@ -1285,7 +1467,7 @@ impl Conversation {
                         })),
                 )
                 .child(
-                    Button::new("unread-rooms")
+                    crate::design::button("unread-rooms")
                         .ghost()
                         .small()
                         .label("Unread")
@@ -1306,66 +1488,115 @@ impl Conversation {
         });
         let mut matches = 0;
         for (id, room) in ordered {
-            if !format!("{} {}", id, room["title"].as_str().unwrap_or(""))
-                .to_lowercase()
-                .contains(&query)
+            if apron_gpui::navigation::score(
+                &query,
+                &format!("{} {}", id, room["title"].as_str().unwrap_or("")),
+            )
+            .is_none()
             {
                 continue;
             }
-            if self.unread_only && self.attention.counts(id).0 == 0 {
+            if query.is_empty()
+                && room["parent_room_id"]
+                    .as_str()
+                    .is_some_and(|p| self.collapsed.contains(p))
+            {
+                continue;
+            }
+            let children: Vec<_> = self
+                .rooms
+                .iter()
+                .filter(|(_, r)| r["parent_room_id"] == *id)
+                .map(|(id, _)| id)
+                .collect();
+            let (mut unread, mut mentions) = self.attention.counts(id);
+            if self.collapsed.contains(id) {
+                for child in &children {
+                    let (u, m) = self.attention.counts(child);
+                    unread += u;
+                    mentions += m;
+                }
+            }
+            if self.unread_only && unread == 0 {
                 continue;
             }
             matches += 1;
             let target = id.clone();
             let title = model::clean(room["title"].as_str().unwrap_or(id), 80);
-            let (unread, mentions) = self.attention.counts(id);
+            let mut navigation_row = div().flex().items_center().w_full();
+            if !children.is_empty() {
+                let parent = id.clone();
+                navigation_row = navigation_row.child(
+                    crate::design::button(SharedString::from(format!("fold-{id}")))
+                        .ghost()
+                        .w_6()
+                        .flex_shrink_0()
+                        .label(if self.collapsed.contains(id) {
+                            "▸"
+                        } else {
+                            "▾"
+                        })
+                        .tooltip(format!("{} threads", children.len()))
+                        .accessibility_label(format!("Toggle threads under {title}"))
+                        .on_click(cx.listener(move |v, _, _, cx| {
+                            if !v.collapsed.remove(&parent) {
+                                v.collapsed.insert(parent.clone());
+                            }
+                            cx.notify();
+                        })),
+                );
+            }
             rooms = rooms.child(
-                Button::new(SharedString::from(format!("room-{id}")))
-                    .ghost()
-                    .selected(id == &self.room)
-                    .w_full()
-                    .h_9()
-                    .mb_1()
-                    .when(room["parent_room_id"].is_string(), |b| b.ml_3().w(px(216.)))
-                    .when(id == &self.room, |b| {
-                        b.bg(cx.theme().accent).text_color(cx.theme().primary)
-                    })
-                    .when(unread > 0, |b| b.font_weight(FontWeight::SEMIBOLD))
-                    .justify_start()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .w_full()
-                            .child(div().flex_1().min_w_0().truncate().child(format!(
-                                "{} {title}",
-                                if room["parent_room_id"].is_string() {
-                                    "↳"
-                                } else {
-                                    "#"
-                                }
-                            )))
-                            .when(unread > 0, |d| {
-                                d.child(
-                                    div()
-                                        .px_2()
-                                        .rounded_full()
-                                        .bg(cx.theme().primary)
-                                        .text_color(cx.theme().primary_foreground)
-                                        .text_xs()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .child(if mentions > 0 {
-                                            format!("{unread} · @{mentions}")
-                                        } else {
-                                            unread.to_string()
-                                        }),
-                                )
-                            }),
-                    )
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.select(target.clone(), window, cx)
-                    })),
+                navigation_row.child(
+                    crate::design::button(SharedString::from(format!("room-{id}")))
+                        .ghost()
+                        .selected(id == &self.room)
+                        .flex_1()
+                        .min_w_0()
+                        .h(px(crate::design::ROW))
+                        .mb_1()
+                        .when(room["parent_room_id"].is_string(), |b| b.ml_3().w(px(216.)))
+                        .when(id == &self.room, |b| {
+                            b.bg(cx.theme().accent).text_color(cx.theme().primary)
+                        })
+                        .when(unread > 0, |b| b.font_weight(FontWeight::SEMIBOLD))
+                        .justify_start()
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .w_full()
+                                .child(div().flex_1().min_w_0().truncate().child(format!(
+                                    "{} {title}",
+                                    if room["parent_room_id"].is_string() {
+                                        "↳"
+                                    } else {
+                                        "#"
+                                    }
+                                )))
+                                .when(unread > 0, |d| {
+                                    d.child(
+                                        div()
+                                            .px_2()
+                                            .rounded_full()
+                                            .bg(cx.theme().primary)
+                                            .text_color(cx.theme().primary_foreground)
+                                            .text_xs()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child(if mentions > 0 {
+                                                format!("{unread} · @{mentions}")
+                                            } else {
+                                                unread.to_string()
+                                            }),
+                                    )
+                                }),
+                        )
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.select(target.clone(), window, cx);
+                            this.composer.update(cx, |s, cx| s.focus(window, cx));
+                        })),
+                ),
             );
         }
         if matches == 0 {
@@ -1410,7 +1641,7 @@ impl Conversation {
     pub(crate) fn sidebar_visible(&self, window: &Window) -> bool {
         // Automatic compact layout until the user explicitly toggles navigation.
         self.sidebar
-            .unwrap_or(window.viewport_size().width >= px(900.))
+            .unwrap_or(window.viewport_size().width >= px(crate::design::COMPACT))
     }
     fn toggle_rooms(&mut self, window: &Window, cx: &mut Context<Self>) {
         self.sidebar = Some(!self.sidebar_visible(window));
@@ -1431,6 +1662,8 @@ impl Conversation {
             };
         let show_history = content_width >= window.rem_size() * 32.;
         let can_load = self.more && !self.loading && self.ready;
+        let notifications = self.notifications;
+        let muted = self.muted(&self.room);
         div()
             .h_16()
             .px_6()
@@ -1441,7 +1674,7 @@ impl Conversation {
             .items_center()
             .gap_3()
             .child(
-                Button::new("toggle-rooms")
+                crate::design::button("toggle-rooms")
                     .ghost()
                     .small()
                     .icon(IconName::PanelLeft)
@@ -1490,11 +1723,11 @@ impl Conversation {
                             .truncate()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
-                            .child(self.status.clone()),
+                            .child(self.typing_label().unwrap_or_else(|| self.status.clone())),
                     ),
             )
             .child(
-                Button::new("find-messages")
+                crate::design::button("find-messages")
                     .ghost()
                     .small()
                     .icon(IconName::Search)
@@ -1504,7 +1737,7 @@ impl Conversation {
             )
             .when(show_history, |d| {
                 d.child(
-                    Button::new("older")
+                    crate::design::button("older")
                         .ghost()
                         .small()
                         .label(if self.loading {
@@ -1519,7 +1752,7 @@ impl Conversation {
             .when(self.attention.counts(&self.room).0 > 0, |d| {
                 let (unread, mentions) = self.attention.counts(&self.room);
                 d.child(
-                    Button::new("unread")
+                    crate::design::button("unread")
                         .ghost()
                         .small()
                         .label(if mentions > 0 {
@@ -1539,7 +1772,7 @@ impl Conversation {
             })
             .when(!self.ready, |d| {
                 d.child(
-                    Button::new("reconnect")
+                    crate::design::button("reconnect")
                         .ghost()
                         .small()
                         .label(if self.status == "Sign-in required" {
@@ -1557,7 +1790,7 @@ impl Conversation {
                 )
             })
             .child(
-                Button::new("conversation-menu")
+                crate::design::button("conversation-menu")
                     .ghost()
                     .small()
                     .icon(IconName::Ellipsis)
@@ -1565,16 +1798,47 @@ impl Conversation {
                     .when(!self.conversation_menu_open, |b| {
                         b.tooltip("Conversation and session actions")
                     })
-                    .dropdown_menu(move |menu, _, _| {
+                    .dropdown_menu(move |menu, w, cx| {
                         menu.menu("Mark room read", Box::new(MarkRead))
                             .menu("Jump to latest", Box::new(Latest))
                             .menu_with_disabled("Load earlier", Box::new(LoadOlder), !can_load)
                             .separator()
                             .menu("Sign in with token…", Box::new(OpenSession))
+                            .menu("Sign in with email…", Box::new(OpenEmail))
+                            .submenu("Room and members", w, cx, |m, _, _| {
+                                m.menu("Create room…", Box::new(CreateRoom))
+                                    .menu("Create thread…", Box::new(CreateThread))
+                                    .menu("Room settings…", Box::new(RoomSettings))
+                                    .menu("Members…", Box::new(ShowMembers))
+                                    .menu("Add member…", Box::new(AddMember))
+                                    .menu("Remove member…", Box::new(RemoveMember))
+                                    .menu("Leave room…", Box::new(LeaveRoom))
+                            })
                             .menu("Next unread mention", Box::new(NextMention))
-                            .menu("Local data…", Box::new(OpenPrivacy))
-                            .menu("Switch light / dark", Box::new(ToggleTheme))
+                            .submenu("Preferences", w, cx, move |m, _, _| {
+                                m.menu(
+                                    if notifications {
+                                        "Disable desktop notifications"
+                                    } else {
+                                        "Enable desktop notifications"
+                                    },
+                                    Box::new(ToggleNotifications),
+                                )
+                                .menu(
+                                    if muted {
+                                        "Unmute this room"
+                                    } else {
+                                        "Mute this room"
+                                    },
+                                    Box::new(ToggleMute),
+                                )
+                                .menu("Presence: online", Box::new(PresenceOnline))
+                                .menu("Presence: opt out", Box::new(PresenceNone))
+                                .menu("Local data…", Box::new(OpenPrivacy))
+                                .menu("Switch light / dark", Box::new(ToggleTheme))
+                            })
                             .menu("Keyboard shortcuts…", Box::new(ShowHelp))
+                            .menu("Component gallery…", Box::new(ShowGallery))
                     })
                     .on_open_change(cx.listener(|this, open, _, cx| {
                         this.conversation_menu_open = *open;
@@ -1634,9 +1898,9 @@ impl Conversation {
             .flex()
             .flex_col()
             .gap_2()
-            .m_4()
+            .m_3()
             .mt_2()
-            .p_3()
+            .p_2()
             .rounded_xl()
             .bg(cx.theme().background)
             .border_1()
@@ -1662,7 +1926,7 @@ impl Conversation {
                             .child(format!("Replying to {}", self.reply_summary(reply))),
                     )
                     .child(
-                        Button::new("cancel-reply")
+                        crate::design::button("cancel-reply")
                             .ghost()
                             .xsmall()
                             .label("Cancel reply")
@@ -1676,7 +1940,7 @@ impl Conversation {
         pane = pane.child(self.staged_images_view(cx));
         if self.transfer_busy {
             pane = pane.child(
-                Button::new("cancel-transfer")
+                crate::design::button("cancel-transfer")
                     .ghost()
                     .small()
                     .label("Cancel transfer")
@@ -1700,7 +1964,7 @@ impl Conversation {
                 .items_center()
                 .gap_2()
                 .child(
-                    Button::new("attach")
+                    crate::design::button("attach")
                         .flex_shrink_0()
                         .ghost()
                         .small()
@@ -1716,7 +1980,7 @@ impl Conversation {
                         .on_click(cx.listener(|this, _, window, cx| this.attach(window, cx))),
                 )
                 .child(
-                    Button::new("mention-person")
+                    crate::design::button("mention-person")
                         .ghost()
                         .small()
                         .label("@")
@@ -1731,7 +1995,7 @@ impl Conversation {
                         })),
                 )
                 .child(
-                    Button::new("preview-markdown")
+                    crate::design::button("preview-markdown")
                         .ghost()
                         .small()
                         .icon(IconName::Eye)
@@ -1750,7 +2014,7 @@ impl Conversation {
                         }),
                 )
                 .child(
-                    Button::new("send")
+                    crate::design::button("send")
                         .flex_shrink_0()
                         .primary()
                         .label(if self.pending {
@@ -1916,11 +2180,21 @@ impl Render for Conversation {
             .on_action(cx.listener(|v,_:&NextMatch,_,cx|v.step_match(true,cx)))
             .on_action(cx.listener(|v,_:&PreviousMatch,_,cx|v.step_match(false,cx)))
             .on_action(cx.listener(|_,_:&ToggleTheme,w,cx| {use gpui_kit::component::{Theme,ThemeMode};let mode=if cx.theme().is_dark(){ThemeMode::Light}else{ThemeMode::Dark};Theme::change(mode,Some(w),cx);crate::design::apply(cx);}))
+            .on_action(cx.listener(|v,_:&CreateRoom,w,cx|v.manage_dialog(apron_gpui::workflows::Kind::Create,w,cx)))
+            .on_action(cx.listener(|v,_:&CreateThread,w,cx|v.manage_dialog(apron_gpui::workflows::Kind::Thread,w,cx)))
+            .on_action(cx.listener(|v,_:&RoomSettings,w,cx|v.manage_dialog(apron_gpui::workflows::Kind::Settings,w,cx)))
+            .on_action(cx.listener(|v,_:&AddMember,w,cx|v.manage_dialog(apron_gpui::workflows::Kind::AddMember,w,cx)))
+            .on_action(cx.listener(|v,_:&RemoveMember,w,cx|v.manage_dialog(apron_gpui::workflows::Kind::RemoveMember,w,cx)))
+            .on_action(cx.listener(|v,_:&LeaveRoom,w,cx|v.manage_dialog(apron_gpui::workflows::Kind::Leave,w,cx)))
+            .on_action(cx.listener(|v,_:&ShowMembers,w,cx|v.member_dialog(w,cx)))
+            .on_action(cx.listener(|v,_:&ToggleNotifications,_,cx|{v.notifications = !v.notifications;cx.notify();}))
+            .on_action(cx.listener(|v,_:&ToggleMute,_,cx|v.set_status(serde_json::json!({"room_id":v.room,"mute":!v.muted(&v.room)}),"status",cx)))
+            .on_action(cx.listener(|v,_:&PresenceOnline,_,cx|v.set_status(serde_json::json!({"status":"online"}),"me",cx)))
+            .on_action(cx.listener(|v,_:&PresenceNone,_,cx|v.set_status(serde_json::json!({"status":""}),"me",cx)))
+            .on_action(cx.listener(|_, _: &ShowGallery, w, cx| crate::design::gallery(w,cx)))
             .on_action(cx.listener(|this, _: &SendMessage, window, cx| this.send(window, cx)))
             .on_action(cx.listener(|this, _: &FindRoom, window, cx| {
-                this.sidebar = Some(true);
-                this.filter.update(cx, |s, cx| s.focus(window, cx));
-                cx.notify();
+                this.open_switcher(window, cx);
             }))
             .on_action(cx.listener(|v,_:&NextMention,_,cx|{
                 if let Some(id)=v.attention.first_mention(&v.room){
@@ -1928,6 +2202,7 @@ impl Render for Conversation {
                     else {v.error="This unread mention is outside retained history. Load earlier messages to inspect it.".into();cx.notify();}
                 }
             }))
+            .on_action(cx.listener(|v,_:&OpenEmail,w,cx|v.email_dialog(w,cx)))
             .on_action(cx.listener(|this, _: &OpenPrivacy, w, cx| this.privacy_dialog(w, cx)))
             .on_action(cx.listener(|this, _: &MarkRead, _, cx| this.mark_read(cx)))
             .on_action(

@@ -1,0 +1,10 @@
+{
+  "mode": "benchmark",
+  "viewport": [
+    1280,
+    900
+  ],
+  "binary_sha256": "fed12ef422ae8a67a0dbc0ff8e97e387543ca84a61ee74f3a02a63dcac6f36d7",
+  "synthetic_owned_server": true,
+  "native_exit": 0
+}

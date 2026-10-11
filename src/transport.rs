@@ -19,10 +19,26 @@ use tokio_tungstenite::{
 };
 #[derive(Debug)]
 pub enum Command {
+    RecoverStep,
+    Typing {
+        room: String,
+        seconds: u64,
+    },
+    Manage {
+        operation: u64,
+        method: String,
+        payload: Value,
+    },
+    Recover {
+        epoch: u64,
+        cursors: BTreeMap<String, u64>,
+    },
     React {
         generation: u64,
         message: u64,
-        emojis: Vec<String>,
+        room: String,
+        user: String,
+        emoji: String,
     },
     Mutate {
         operation: u64,
@@ -67,6 +83,20 @@ pub enum Command {
 }
 #[derive(Debug)]
 pub enum Event {
+    Identity(Value),
+    Managed {
+        operation: u64,
+        result: Result<Value, String>,
+    },
+    Recovered {
+        epoch: u64,
+        room: String,
+        page: Value,
+    },
+    RecoveryGap {
+        epoch: u64,
+        message: String,
+    },
     Image {
         generation: u64,
         key: String,
@@ -121,6 +151,9 @@ impl Bridge {
         Self::start_with_token(url, None)
     }
     pub fn start_with_token(url: String, token: Option<Secret>) -> Result<Self> {
+        Self::start_with_storage(url, token, false)
+    }
+    pub fn start_with_storage(url: String, token: Option<Secret>, remember: bool) -> Result<Self> {
         media::endpoint(&url)?;
         let (tx, rx) = mpsc::channel(16);
         let (etx, erx) = async_channel::bounded(128);
@@ -132,7 +165,7 @@ impl Bridge {
                     .enable_all()
                     .build()
                     .expect("Tokio runtime");
-                runtime.block_on(run(url, token, rx, etx));
+                runtime.block_on(run(url, token, remember, rx, etx));
             })?;
         Ok(Self {
             commands: tx,
@@ -162,6 +195,8 @@ pub struct Client {
     next: u64,
     pub server: Value,
     awaiting_pong: bool,
+    recovery: std::collections::VecDeque<(u64, String, u64, Option<u64>)>,
+    recovery_budget: usize,
     events: Option<async_channel::Sender<Event>>,
 }
 impl Client {
@@ -180,6 +215,8 @@ impl Client {
             next: 0,
             server: Value::Null,
             awaiting_pong: false,
+            recovery: Default::default(),
+            recovery_budget: 0,
             events,
         };
         let hello = timeout(Duration::from_secs(15), c.receive()).await??;
@@ -270,6 +307,69 @@ impl Client {
             }
         })
     }
+    /// Read a stable, bounded log interval before replacing the user's full set.
+    pub async fn toggle_reaction(
+        &mut self,
+        room: &str,
+        message: u64,
+        user: &str,
+        emoji: &str,
+    ) -> Result<()> {
+        ensure!(
+            !emoji.is_empty() && emoji.len() <= 64 && !emoji.chars().any(char::is_control),
+            "Invalid emoji"
+        );
+        let mut scan = crate::reactions::OwnScan::default();
+        let mut after = message;
+        let mut horizon: Option<u64> = None;
+        let mut creation_retained = true;
+        for _ in 0..32 {
+            let mut params = json!({"room_id":room,"after":after.to_string(),"limit":PAGE});
+            if let Some(end) = horizon {
+                params["before"] = json!(end.to_string());
+            }
+            let page = self.rpc("history", params).await?;
+            let end = *horizon.get_or_insert(
+                number(&page["latest_log_id"]).context("Missing reaction history horizon")?,
+            );
+            creation_retained &=
+                number(&page["history_log_id"]).is_some_and(|floor| floor <= message);
+            ensure!(
+                page["reactions"].as_array().map_or(0, Vec::len) <= PAGE,
+                "Oversized reaction history"
+            );
+            for record in page["reactions"].as_array().into_iter().flatten() {
+                if number(&record["log_id"]).is_some_and(|log| log <= end) {
+                    scan.apply(record, message, user);
+                }
+            }
+            if page["more"] != true {
+                let mut set = scan
+                    .finish(creation_retained)
+                    .map_err(|e| RemoteError(e.to_string()))?;
+                if !set.remove(emoji) {
+                    ensure!(set.len() < 16, "Remove a reaction before adding another");
+                    set.insert(emoji.to_owned());
+                }
+                self.rpc(
+                    "reactions",
+                    json!({"message_id":message.to_string(),"emojis":set}),
+                )
+                .await?;
+                return Ok(());
+            }
+            let last = number(&page["last_log_id"]).context("Missing reaction history position")?;
+            ensure!(
+                last >= after && last < end,
+                "Reaction history did not advance"
+            );
+            after = last + 1;
+        }
+        Err(RemoteError(
+            "Reaction history exceeds the reconciliation budget. No reaction was changed.".into(),
+        )
+        .into())
+    }
     pub async fn history(&mut self, room: &str, before: Option<u64>) -> Result<Value> {
         let mut params = json!({"room_id":room,"limit":PAGE});
         if let Some(n) = before {
@@ -342,9 +442,27 @@ async fn emit(tx: &async_channel::Sender<Event>, e: Event) {
 async fn run(
     url: String,
     mut token: Option<Secret>,
+    remember: bool,
     mut commands: mpsc::Receiver<Command>,
     events: async_channel::Sender<Event>,
 ) {
+    if remember && token.is_none() {
+        match crate::vault::load(&url).await {
+            Ok(saved) => token = Some(saved),
+            Err(e) => {
+                emit(&events, Event::State("Sign-in required".into())).await;
+                emit(
+                    &events,
+                    Event::Failure {
+                        generation: None,
+                        message: e.to_string(),
+                    },
+                )
+                .await;
+                return;
+            }
+        }
+    }
     let mut delay = 1;
     let authenticated = token.is_some();
     loop {
@@ -352,7 +470,15 @@ async fn run(
             return;
         }
         emit(&events, Event::State("Connecting…".into())).await;
-        let result = connected(&url, &mut token, authenticated, &mut commands, &events).await;
+        let result = connected(
+            &url,
+            &mut token,
+            authenticated,
+            remember,
+            &mut commands,
+            &events,
+        )
+        .await;
         if commands.is_closed() || events.is_closed() {
             return;
         }
@@ -420,6 +546,7 @@ async fn connected(
     url: &str,
     token: &mut Option<Secret>,
     authenticated: bool,
+    remember: bool,
     commands: &mut mpsc::Receiver<Command>,
     events: &async_channel::Sender<Event>,
 ) -> Result<()> {
@@ -428,6 +555,20 @@ async fn connected(
     if let Some(value) = auth["token"].as_str() {
         *token = Some(Secret::new(value.to_owned()).map_err(|_| AuthRequired)?);
     }
+    if remember
+        && let Some(secret) = token.as_ref()
+        && let Err(e) = crate::vault::store(url, secret).await
+    {
+        emit(
+            events,
+            Event::Failure {
+                generation: None,
+                message: e.to_string(),
+            },
+        )
+        .await;
+    }
+    emit(events, Event::Identity(auth["you"].clone())).await;
     let rooms = c
         .rpc("room_list", json!({"filter":"all","members":true}))
         .await?;
@@ -456,6 +597,7 @@ async fn connected(
     let mut transfers = tokio::task::JoinSet::new();
     loop {
         tokio::select! {
+         biased;
          _=transfers.join_next(),if !transfers.is_empty()=>{},
          frame=c.receive()=>{let frame=frame?;c.notice(frame).await?;},
          _=ping.tick()=>{ensure!(!c.awaiting_pong,"Server heartbeat timed out");c.awaiting_pong=true;c.ws.send(Frame::Text(json!({"method":"ping"}).to_string().into())).await?;},
@@ -464,6 +606,7 @@ async fn connected(
               return Ok(());
           }
          }
+         _=async {},if !c.recovery.is_empty()=>{handle_command(Command::RecoverStep,&mut c,url,events,&mut transfers).await?;}
         }
     }
 }
@@ -475,21 +618,147 @@ async fn handle_command(
     transfers: &mut tokio::task::JoinSet<()>,
 ) -> Result<bool> {
     match command {
+        Command::Typing { room, seconds } => {
+            if c.server["capabilities"]
+                .as_array()
+                .is_some_and(|v| v.iter().any(|c| c == "activity"))
+            {
+                c.ws.send(Frame::Text(
+                    json!({"method":"activity","params":{"room_id":room,"typing":seconds.min(8)}})
+                        .to_string()
+                        .into(),
+                ))
+                .await?;
+            }
+        }
+
+        Command::Manage {
+            operation,
+            method,
+            payload,
+        } => {
+            let cap = if matches!(method.as_str(), "status" | "me") {
+                "status"
+            } else {
+                "rooms"
+            };
+            let result = if !matches!(
+                method.as_str(),
+                "room_set" | "room_join" | "room_leave" | "status" | "me"
+            ) || !c.server["capabilities"]
+                .as_array()
+                .is_some_and(|v| v.iter().any(|c| c == cap))
+            {
+                Err(RemoteError("This operation is not supported by the server.".into()).into())
+            } else {
+                c.rpc(&method, payload).await
+            };
+            match result {
+                Ok(value) => {
+                    emit(
+                        events,
+                        Event::Managed {
+                            operation,
+                            result: Ok(value),
+                        },
+                    )
+                    .await
+                }
+                Err(e) => {
+                    let remote = e.downcast_ref::<RemoteError>().is_some();
+                    emit(
+                        events,
+                        Event::Managed {
+                            operation,
+                            result: Err(if remote {
+                                e.to_string()
+                            } else {
+                                "Completion is uncertain. Inspect server state before trying again."
+                                    .into()
+                            }),
+                        },
+                    )
+                    .await;
+                    if !remote {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+
+        Command::Recover { epoch, cursors } => {
+            c.recovery = cursors
+                .into_iter()
+                .take(256)
+                .map(|(room, read)| (epoch, room, read.saturating_add(1), None))
+                .collect();
+            c.recovery_budget = 32;
+        }
+        Command::RecoverStep => {
+            let Some((epoch, room, after, horizon)) = c.recovery.pop_front() else {
+                return Ok(true);
+            };
+            if c.recovery_budget == 0 {
+                c.recovery.clear();
+                emit(events,Event::RecoveryGap{epoch,message:"Unread recovery reached its bounded history budget; some rooms may be incomplete.".into()}).await;
+                return Ok(true);
+            }
+            c.recovery_budget -= 1;
+            let mut params = json!({"room_id":room,"after":after.to_string(),"limit":PAGE});
+            if let Some(end) = horizon {
+                params["before"] = json!(end.to_string());
+            }
+            let page = match c.rpc("history", params).await {
+                Ok(page) => page,
+                Err(e) => {
+                    emit(events,Event::RecoveryGap{epoch,message:"Unread recovery was interrupted or refused; counts may be incomplete.".into()}).await;
+                    if e.downcast_ref::<RemoteError>().is_none() {
+                        return Err(e);
+                    }
+                    return Ok(true);
+                }
+            };
+            let end = horizon
+                .or_else(|| number(&page["latest_log_id"]))
+                .context("Missing recovery horizon")?;
+            if number(&page["history_log_id"]).is_none_or(|floor| floor > after) {
+                emit(
+                    events,
+                    Event::RecoveryGap {
+                        epoch,
+                        message: "Some unread history has expired; counts may be incomplete."
+                            .into(),
+                    },
+                )
+                .await;
+            }
+            ensure!(
+                page["messages"].as_array().map_or(0, Vec::len) <= PAGE,
+                "Oversized recovery page"
+            );
+            if page["more"] == true {
+                let last = number(&page["last_log_id"]).context("Missing recovery position")?;
+                ensure!(
+                    last >= after && last < end,
+                    "Recovery history did not advance"
+                );
+                c.recovery
+                    .push_back((epoch, room.clone(), last + 1, Some(end)));
+            }
+            emit(events, Event::Recovered { epoch, room, page }).await;
+        }
         Command::React {
             generation,
             message,
-            emojis,
+            room,
+            user,
+            emoji,
         } => {
             let result = if c.server["capabilities"]
                 .as_array()
                 .is_some_and(|v| v.iter().any(|v| v == "reactions"))
             {
-                c.rpc(
-                    "reactions",
-                    json!({"message_id":message.to_string(),"emojis":emojis}),
-                )
-                .await
-                .map(|_| ())
+                c.toggle_reaction(&room, message, &user, &emoji).await
             } else {
                 Err(RemoteError("This server does not support reactions.".into()).into())
             };

@@ -20,9 +20,41 @@ pub struct Snapshot {
     pub reads: BTreeMap<String, u64>,
     #[serde(default)]
     pub mentions: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    pub attention_pending: BTreeMap<String, BTreeMap<u64, bool>>,
+    #[serde(default)]
+    pub attention_evidence: BTreeMap<String, BTreeMap<u64, (u64, bool)>>,
 }
 impl Snapshot {
     pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.attention_pending.len() <= 256
+                && self
+                    .attention_pending
+                    .keys()
+                    .all(|r| !r.is_empty() && r.len() <= 256)
+                && self
+                    .attention_pending
+                    .values()
+                    .map(BTreeMap::len)
+                    .sum::<usize>()
+                    <= 2000,
+            "Pending attention exceeds limits"
+        );
+        ensure!(
+            self.attention_evidence.len() <= 256
+                && self
+                    .attention_evidence
+                    .keys()
+                    .all(|r| !r.is_empty() && r.len() <= 256)
+                && self
+                    .attention_evidence
+                    .values()
+                    .map(BTreeMap::len)
+                    .sum::<usize>()
+                    <= 2000,
+            "Attention evidence exceeds limits"
+        );
         ensure!(self.version == 1, "Unsupported local-state version");
         ensure!(
             self.drafts.len() <= 256 && self.reads.len() <= 256 && self.mentions.len() <= 256,
@@ -255,6 +287,8 @@ mod tests {
             drafts: BTreeMap::from([("r".into(), ("synthetic draft".into(), Some(3)))]),
             reads: BTreeMap::from([("r".into(), 7)]),
             mentions: BTreeMap::new(),
+            attention_evidence: BTreeMap::new(),
+            attention_pending: BTreeMap::new(),
         };
         b.save(&p, &s).unwrap();
         assert_eq!(b.load(&p).unwrap(), Some(s));

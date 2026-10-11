@@ -160,7 +160,7 @@ impl Render for MutationForm {
    .when(stale,|d|d.child(div().text_sm().text_color(cx.theme().danger).child("The message changed. Close and reopen to review the latest version.")))
    .when(!self.error.is_empty() && !stale,|d|d.child(div().text_sm().text_color(cx.theme().danger).child(self.error.clone())))
    .when(self.busy,|d|d.child(div().text_sm().child("Waiting for the server. Closing this dialog does not cancel an already submitted change.")))
-   .child(div().flex().justify_end().gap_2().child(Button::new("cancel-edit").label(if self.busy{"Close"}else{"Cancel"}).on_click(cx.listener(|f,_,w,cx|{f.closed=true;w.close_dialog(cx);})))
-    .child(Button::new("save-edit").when(self.delete,|b|b.danger()).when(!self.delete,|b|b.primary()).label(if self.delete{"Delete message"}else{"Save changes"}).disabled(disabled).on_click(cx.listener(|this,_,w,cx|this.submit(w,cx)))))
+   .child(div().flex().justify_end().gap_2().child(crate::design::button("cancel-edit").label(if self.busy{"Close"}else{"Cancel"}).on_click(cx.listener(|f,_,w,cx|{f.closed=true;w.close_dialog(cx);})))
+    .child(crate::design::button("save-edit").when(self.delete,|b|b.danger()).when(!self.delete,|b|b.primary()).label(if self.delete{"Delete message"}else{"Save changes"}).disabled(disabled).on_click(cx.listener(|this,_,w,cx|this.submit(w,cx)))))
     }
 }

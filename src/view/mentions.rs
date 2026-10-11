@@ -77,7 +77,7 @@ impl Conversation {
             for (ix, member) in candidates.iter().enumerate() {
                 let id = member.id.clone();
                 list = list.child(
-                    Button::new(SharedString::from(format!("mention-{}", member.id)))
+                    crate::design::button(SharedString::from(format!("mention-{}", member.id)))
                         .ghost()
                         .small()
                         .justify_start()
@@ -109,7 +109,7 @@ impl Conversation {
                 for id in ids {
                     let remove = id.clone();
                     chips = chips.child(
-                        Button::new(SharedString::from(format!("remove-mention-{id}")))
+                        crate::design::button(SharedString::from(format!("remove-mention-{id}")))
                             .ghost()
                             .xsmall()
                             .label(format!("@{id} ×"))

@@ -12,4 +12,9 @@ pub mod edit;
 pub mod images;
 pub mod mentions;
 
+pub mod email;
+pub mod links;
+pub mod navigation;
 pub mod reactions;
+pub mod vault;
+pub mod workflows;

@@ -5,26 +5,30 @@ This repo is experimenting with desktop-native implementations of an Apron clien
 ## GPUI native client
 
 A standalone Rust/GPUI Kit client for Apron 8, with a virtualized conversation
-view, selectable Markdown, room/thread navigation, replies, session token sign-in,
+view, selectable Markdown, room/thread management, replies, email and token sign-in,
 mentions, image/file transfers, contextual editing and opt-in private drafts.
 This branch contains only the GPUI implementation. The GTK implementation remains
 an independent alternative in [PR #1](https://github.com/apron-chat/apron-desktop/pull/1).
 There is no GTK or Python application runtime/build dependency; Python is used
 only by optional synthetic test tools. Full apron-web parity remains deferred.
 
-![Native Wayland preview using fictional messages](docs/refinement/desktop/report-wide.png)
+![Native Wayland preview using fictional messages](docs/milestone/wide/report-wide.png)
 
-See [REFINEMENT.md](REFINEMENT.md) for the Swiftcord-inspired design pass,
-new daily-chat workflows, native screenshots and regression evidence.
+See [IMPLEMENTATION.md](IMPLEMENTATION.md) for the maintained checklist,
+[DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) for shared components and interaction rules,
+and [MILESTONE.md](MILESTONE.md) for current validation. [REFINEMENT.md](REFINEMENT.md)
+records the earlier Swiftcord-inspired pass.
 
 ## Build and launch on NixOS / niri
 
 From the repository root:
 
 ```sh
+nix build
+nix run . -- --server wss://YOUR_APRON_HOST/ws
+# Or develop with the pinned rustup toolchain:
 nix develop
 cargo build --release --locked
-./target/release/apron-gpui --server wss://YOUR_APRON_HOST/ws
 ```
 
 Launch inside your existing niri session, with `WAYLAND_DISPLAY` and
@@ -35,12 +39,14 @@ configure your normal `xdg-desktop-portal` backend for niri. Missing portal supp
 is reported in the UI. Hardware GPU, actual niri, IME, and screen-reader behavior
 have not been verified in this workspace.
 
-The flake pins nixpkgs and evaluates on x86_64-linux and aarch64-linux. It is a
-**development shell**, not a fully built Nix package. Cargo.lock and
-rust-toolchain.toml pin dependencies and Rust 1.99.0; rustup downloads that
-compiler on first use. The shell includes Python with websockets for the synthetic fixture and wl-clipboard for native clipboard verification. GPUI Kit 0.7.1 depends on gpui-pre 0.3.8. Rust 1.94 was
-insufficient for this dependency snapshot (`std::hint::cold_path`). No patches or
-RUSTC_BOOTSTRAP are used. A clean Nix build and aarch64 compilation remain unrun.
+The flake now exports an installable package and app for x86_64-linux/aarch64-linux,
+plus the existing development shell. `nix/package.nix` installs the desktop entry
+and icon and wraps runtime libraries, libsecret and xdg-utils. `nix/toolchain.nix`
+pins official Rust 1.99.0 binary components by checksum because the pinned nixpkgs
+compiler is older. Cargo.lock fixes crate versions. **The new Nix derivation has
+not been evaluated or built here: this environment has no Nix executable.**
+CI includes a Nix build job; its result is separate from successful Cargo builds.
+No compiler patches or RUSTC_BOOTSTRAP are used.
 
 On another Linux distribution supply Rust 1.99, a C/C++ toolchain, pkg-config,
 CMake, Clang/libclang, fontconfig/freetype, Wayland, libxkbcommon (including X11),
@@ -61,17 +67,17 @@ Then run `./target/release/apron-gpui` from the repository root. There are no em
 accounts, or production messages. The fixture’s documented token
 `local-fixture-token` is synthetic and works only with the loopback fixture. Use
 `wss` for remote connections; cleartext `ws` is restricted to loopback addresses.
-The address is supplied at launch, not through an in-app settings dialog.
+The address can be supplied at launch or changed in the sign-in dialog.
 
 ## Implemented scope
 
 - Apron 8 handshake, guest and token auth, room listing/joining, room/thread navigation.
   The conversation menu opens **Sign in with token…**. Tokens and rotated/resume
-  tokens stay in RAM; there is no token file, CLI token argument or automatic guest
+  tokens stay in RAM by default, with optional system-keyring storage. There is no
+  plaintext token file, CLI token argument or automatic guest
   fallback after rejection. The masked field and its undo history are cleared on
   submission. Transport secrets are redacted in Debug and zeroized when dropped;
-  UI/network buffers are not promised to be fully zeroized. Restarting requires
-  signing in again. Changing sessions explicitly clears drafts and selected files.
+  UI/network buffers are not promised to be fully zeroized. After restart, sign in again or explicitly load the saved keyring session. Changing sessions explicitly clears drafts and selected files.
 - Latest/older history pages of 50. Older pages reconcile edits/deletes/moves against
   a frozen log horizon with a finite 128-page budget. Stale room responses are discarded.
 - Shared bounded state (2,000 messages / 8 MiB serialized message data), 2 MiB frame
@@ -82,7 +88,7 @@ The address is supplied at launch, not through an in-app settings dialog.
   The sidebar automatically hides below 900 px until manually toggled; timestamps
   use the local timezone and cached replies include a readable excerpt.
   Connection state stays visible in the header when navigation is hidden.
-  Ctrl+K opens/focuses room filtering. Threads sort beside their parent; the list
+  Ctrl+K opens a fuzzy room/thread switcher. Threads collapse under their parent with aggregate hidden attention; the list
   filters local room IDs/titles, not remote message history. Live room rename/leave
   deltas update the index. Minimum window is 640×480; cramped panes move history
   controls into the menu and omit the composer hint to preserve the Send action.
@@ -92,8 +98,9 @@ The address is supplied at launch, not through an in-app settings dialog.
   only”; paginate manually to extend the search. It never searches a remote archive.
 - Reactions, when advertised: the contextual React submenu offers Like, Love,
   Celebrate and Laugh. Existing reaction chips show totals and toggle your set.
-  Updates replace a user's complete known set, ordered by log ID; empty sets remove
-  reactions. No optimistic counts or automatic retries after uncertain completion.
+  Before each toggle, a forward scan of at most 32 × 50 log changes establishes
+  the complete own set. Unknown/expired/oversized/budget-exceeded state refuses the
+  write instead of replacing from a partial cache. Empty sets remove reactions. No optimistic counts or automatic retries after uncertain completion.
   Limits: 2,048 message/user sets, 16 emoji per set, 64 bytes per emoji; oversized
   sets are ignored. Counts and your set cover retained/fetched evidence; unseen or
   evicted older reactions may be absent. A complete historical reaction census and
@@ -144,11 +151,31 @@ The address is supplied at launch, not through an in-app settings dialog.
   Authentication rejection waits for explicit action; a network loss during auth
   reconnects with a generic error that cannot echo token input.
 
-**Deferred:** email/OAuth/account creation, keyring token storage, complete offline unread recovery,
-notifications, room creation/moderation, presence/typing, durable appearance settings,
-remote message search, WYSIWYG compose, active external links, drag/drop,
-full apron-web feature parity. Reactions and local search have the bounds described above.
-Room lists and draft count are capped at 256; room-list pagination is not implemented.
+**Current daily-use additions:** conversation menu → Room and members creates rooms
+and threads, edits title/description, lists members, adds/removes exact user IDs,
+and leaves rooms. Server permissions remain authoritative; unsupported membership
+changes show errors. Preferences offers session-only desktop notification opt-in,
+per-room mute/unmute and online/opt-out presence. Notifications contain no chat text,
+respect focused rooms, inherited mutes and DND, and are rate limited. Typing expires
+using one-shot timers; outgoing typing is throttled, not polled.
+
+**Login:** token sign-in optionally saves rotated credentials through Secret Service
+using `secret-tool` (libsecret). No credentials enter command arguments or plaintext
+profile files. The form can load or remove the saved session for the exact server
+URL. One account is remembered per URL. A missing/locked service fails visibly;
+this environment tested the unavailable path, not a real keyring round trip.
+Email sign-in uses a separate unauthenticated WebSocket for proposal and code
+approval; provider errors are redacted. Account creation depends on server policy.
+
+**Links:** message menu → Open external links lists up to 16 explicit HTTP(S)
+links for browser opening. Credential-bearing and active/local schemes are rejected.
+No previews or images are fetched automatically.
+
+**Remaining:** native passkeys, arbitrary reaction picker, complete archive reaction
+counts, remote search, drag/drop and clipboard files, durable appearance/notification
+preferences, avatars and richer media viewing. The protocol defines no generic
+remote search or room-list pagination cursor; no endpoints are invented. Room lists
+remain capped at 256. Full web parity is not claimed.
 
 The transport owns its own Tokio runtime; GPUI awaits events without busy polling.
 CPU timers in `--smoke` and `--benchmark` exist only in opt-in test modes.
@@ -157,7 +184,8 @@ CPU timers in `--smoke` and `--benchmark` exist only in opt-in test modes.
 
 Conversation menu → **Local data** enables draft/read-cursor persistence for the
 current server/user. It is off by default. It stores draft text, reply IDs, selected
-mention IDs and read cursors; never tokens, message history or attachments. Files
+mention IDs, read cursors and bounded attention metadata (message/log IDs and mention
+flags); never tokens, message bodies or attachments. Files
 are unencrypted, private (0600, directory 0700), atomic, and keyed by a hash of the
 server/user. Location: `$XDG_STATE_HOME/apron-gpui` (default `~/.local/state/apron-gpui`).
 Limits: 256 rooms, 32,000 bytes per draft, 256 KiB draft text, 512 KiB per profile,
@@ -177,7 +205,7 @@ Image upload creates the message before transferring bytes. On failure/cancel,
 inspect the posted message before retrying; the app does not automatically repost.
 Clipboard previews are session-only and clear when switching rooms.
 
-See [REFINEMENT.md](REFINEMENT.md) for current validation and visual review;
+See [MILESTONE.md](MILESTONE.md) for current validation and visual review;
 [DAILY_USE.md](DAILY_USE.md) retains the earlier daily-use implementation evidence.
 
 ## Verification

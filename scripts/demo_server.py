@@ -36,12 +36,13 @@ for i, (user, text, mentions) in enumerate(examples):
                      'body': {'text': text, 'format': 'markdown', 'mentions': mentions}})
 MESSAGES.append({'message_id': str(BASE + 1100), 'log_id': str(BASE + 1100), 'room_id': 'native', 'from': ADA,
                  'body': {'text': 'A thread is its own room, with its own history.\nTry a reply, or start another thread in General.'}})
+REACTIONS = []
 CLIENTS = set()
 COUNTER = BASE + 2000
 
 
 def record(room):
-    related = [int(m['log_id']) for m in MESSAGES if m['room_id'] == room['room_id']]
+    related = [int(m['log_id']) for m in MESSAGES + REACTIONS if m['room_id'] == room['room_id']]
     return {**room, 'latest_log_id': str(max(related, default=int(room['log_id'])))}
 
 
@@ -74,16 +75,17 @@ async def handler(ws):
                           'not_joined': [record(r) for r in selected if r['room_id'] not in joined], 'users': MEMBERS}
             elif method == 'history':
                 room_id = p.get('room_id', 'general')
-                messages = sorted([m for m in MESSAGES if m['room_id'] == room_id], key=lambda m: int(m['log_id']))
+                messages = sorted([m for m in MESSAGES + REACTIONS if m['room_id'] == room_id], key=lambda m: int(m['log_id']))
                 selected = [m for m in messages if int(p.get('after', '0')) <= int(m['log_id']) <= int(p.get('before', str(10**30))) ]
                 limit = min(50, max(1, int(p.get('limit', 50))))
                 page = selected[:limit] if 'after' in p else selected[-limit:]
-                result = {'messages': page, 'more': len(selected) > len(page), 'latest_log_id': record(ROOMS[room_id])['latest_log_id'], 'history_log_id': str(BASE)}
+                result = {'messages': [m for m in page if 'reactions' not in m], 'reactions': [m for m in page if 'reactions' in m], 'more': len(selected) > len(page), 'latest_log_id': record(ROOMS[room_id])['latest_log_id'], 'history_log_id': str(BASE)}
                 if page:
                     result.update(first_log_id=page[0]['log_id'], last_log_id=page[-1]['log_id'])
             elif method == 'reactions':
                 COUNTER = max(COUNTER + 1, int(time.time() * 1000))
                 reaction_record = {'message_id': p['message_id'], 'log_id': str(COUNTER), 'room_id': 'general', 'reactions': [{'from': YOU, 'emojis': p.get('emojis', [])}]}
+                REACTIONS.append(reaction_record)
                 for client in list(CLIENTS):
                     try: await client.send(json.dumps({'method': 'reactions', 'params': reaction_record}))
                     except websockets.ConnectionClosed: pass

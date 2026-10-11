@@ -125,3 +125,70 @@ mod tests {
         assert!(r.own(10, "bad").is_empty());
     }
 }
+
+/// Completeness proof for an own replacement set. Missing/invalid is never empty.
+#[derive(Default)]
+pub struct OwnScan {
+    latest: u64,
+    own: Option<Option<BTreeSet<String>>>,
+}
+impl OwnScan {
+    pub fn apply(&mut self, record: &Value, message: u64, user: &str) {
+        if number(&record["message_id"]) != Some(message) {
+            return;
+        }
+        let Some(log) = number(&record["log_id"]) else {
+            return;
+        };
+        for entry in record["reactions"].as_array().into_iter().flatten() {
+            if entry["from"]["user_id"] != user || log < self.latest {
+                continue;
+            }
+            self.latest = log;
+            self.own = Some(entry["emojis"].as_array().and_then(|values| {
+                if values.len() > 16 {
+                    return None;
+                }
+                values
+                    .iter()
+                    .map(|value| {
+                        value
+                            .as_str()
+                            .filter(|s| {
+                                !s.is_empty()
+                                    && s.len() <= 64
+                                    && !s.chars().any(char::is_control)
+                                    && crate::model::clean(s, 64) == *s
+                            })
+                            .map(str::to_owned)
+                    })
+                    .collect()
+            }));
+        }
+    }
+    pub fn finish(self, creation_retained: bool) -> anyhow::Result<BTreeSet<String>> {
+        match self.own {
+            Some(Some(set)) => Ok(set),
+            None if creation_retained => Ok(BTreeSet::new()),
+            _ => anyhow::bail!("Reaction state is incomplete. No reaction was changed."),
+        }
+    }
+}
+#[cfg(test)]
+mod scan_tests {
+    use super::*;
+    #[test]
+    fn unknown_empty_replacement_and_invalid_are_distinct() {
+        assert!(OwnScan::default().finish(false).is_err());
+        assert!(OwnScan::default().finish(true).unwrap().is_empty());
+        let mut scan = OwnScan::default();
+        let rec = |log, emojis| json!({"message_id":"10","log_id":log,"reactions":[{"from":{"user_id":"me"},"emojis":emojis}]});
+        scan.apply(&rec("12", json!(["👍", "❤️"])), 10, "me");
+        scan.apply(&rec("11", json!([])), 10, "me");
+        assert_eq!(scan.finish(false).unwrap().len(), 2);
+        let mut scan = OwnScan::default();
+        scan.apply(&rec("12", json!(["👍"])), 10, "me");
+        scan.apply(&rec("13", json!(["\u{001b}"])), 10, "me");
+        assert!(scan.finish(true).is_err());
+    }
+}

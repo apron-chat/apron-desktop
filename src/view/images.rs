@@ -92,7 +92,7 @@ impl Conversation {
             .gap_2();
         if self.clipboard_task.is_some() {
             d = d.child(
-                Button::new("cancel-paste")
+                crate::design::button("cancel-paste")
                     .small()
                     .label("Cancel image preparation")
                     .on_click(cx.listener(|v, _, _, cx| {
@@ -133,7 +133,7 @@ impl Conversation {
                     file.bytes.len().div_ceil(1024)
                 )))
                 .child(
-                    Button::new(("remove-file", ix))
+                    crate::design::button(("remove-file", ix))
                         .ghost()
                         .small()
                         .icon(IconName::Close)
@@ -203,7 +203,7 @@ impl Conversation {
             .items_start()
             .gap_1()
             .child(
-                Button::new(SharedString::from(format!("image-{id}-{ix}")))
+                crate::design::button(SharedString::from(format!("image-{id}-{ix}")))
                     .ghost()
                     .small()
                     .label("Load image from this server")
