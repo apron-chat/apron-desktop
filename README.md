@@ -16,7 +16,7 @@ only by optional synthetic test tools. Full apron-web parity remains deferred.
 
 See [IMPLEMENTATION.md](IMPLEMENTATION.md) for the maintained checklist,
 [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) for shared components and interaction rules,
-and [MILESTONE.md](MILESTONE.md) for current validation. [REFINEMENT.md](REFINEMENT.md)
+and [DAILY_WORKFLOWS.md](DAILY_WORKFLOWS.md) for current validation. [REFINEMENT.md](REFINEMENT.md)
 records the earlier Swiftcord-inspired pass.
 
 ## Build and launch on NixOS / niri
@@ -41,11 +41,11 @@ have not been verified in this workspace.
 
 The flake now exports an installable package and app for x86_64-linux/aarch64-linux,
 plus the existing development shell. `nix/package.nix` installs the desktop entry
-and icon and wraps runtime libraries, libsecret and xdg-utils. `nix/toolchain.nix`
+and icon and wraps runtime libraries, libsecret, xdg-utils and wl-clipboard. `nix/toolchain.nix`
 pins official Rust 1.99.0 binary components by checksum because the pinned nixpkgs
-compiler is older. Cargo.lock fixes crate versions. **The new Nix derivation has
-not been evaluated or built here: this environment has no Nix executable.**
-CI includes a Nix build job; its result is separate from successful Cargo builds.
+compiler is older. Cargo.lock fixes crate versions. The local environment has no Nix executable. GitHub Actions successfully built
+the pinned Nix package at baseline `46e19b5`; exact-head validation is recorded in PR #2.
+Actual niri/hardware validation remains separate from headless Weston checks.
 No compiler patches or RUSTC_BOOTSTRAP are used.
 
 On another Linux distribution supply Rust 1.99, a C/C++ toolchain, pkg-config,
@@ -103,12 +103,13 @@ The address can be supplied at launch or changed in the sign-in dialog.
   write instead of replacing from a partial cache. Empty sets remove reactions. No optimistic counts or automatic retries after uncertain completion.
   Limits: 2,048 message/user sets, 16 emoji per set, 64 bytes per emoji; oversized
   sets are ignored. Counts and your set cover retained/fetched evidence; unseen or
-  evicted older reactions may be absent. A complete historical reaction census and
-  an arbitrary emoji picker are deferred.
+  evicted older reactions may be absent. A complete historical reaction census remains deferred. The Choose emoji action searches the
+  Unicode catalogue by name/shortcode or pasted emoji, including skin variants;
+  it uses the same conservative reaction reconciliation.
 - The sidebar's Unread view filters received/fetched unread rooms. A semantic blue
   selection, nested threads, deterministic local author initials, and compact
   same-author runs improve scanning. Initials require no avatar downloads.
-  Conversation menu → Switch light / dark changes this session's appearance.
+  Conversation menu → Switch light / dark saves the appearance for this server/user profile.
 - Contextual message actions: right-click, or Tab to a row’s ellipsis and press
   Enter. Reply/Copy labels no longer repeat on every row. Menus support arrows,
   Enter and Escape. With message actions focused, R replies and Ctrl+Shift+C
@@ -144,7 +145,12 @@ The address can be supplied at launch or changed in the sign-in dialog.
   never sends. Embedded upload images require an explicit same-server Load action.
   Raster limits: 4096 pixels per side, eight million pixels, 64 MiB decoder budget;
   eight cached thumbnails, each at most 640×480. SVG is rejected; animation uses
-  its first frame. Metadata is removed during normalization. Drag/drop is deferred.
+  its first frame. Metadata is removed during normalization. Drop local files onto the composer or
+  paste a file-manager copy to stage files, then explicitly Send. File clipboard
+  offers use `wl-paste` (included by Nix); ordinary text is never treated as a path.
+  Rename staged attachment titles before sending, or edit your sent message
+  to change attachment titles independently of its caption. Local filenames and
+  attachment identity/URLs are preserved. Titles are 1–180 characters.
 - Bounded event channels, protocol heartbeat, exponential reconnect, explicit errors.
   Uncertain sends are not automatically retried. Reconnect uses the latest returned
   session token, including guest tokens, preserving identity where supported.
@@ -154,8 +160,9 @@ The address can be supplied at launch or changed in the sign-in dialog.
 **Current daily-use additions:** conversation menu → Room and members creates rooms
 and threads, edits title/description, lists members, adds/removes exact user IDs,
 and leaves rooms. Server permissions remain authoritative; unsupported membership
-changes show errors. Preferences offers session-only desktop notification opt-in,
-per-room mute/unmute and online/opt-out presence. Notifications contain no chat text,
+changes show errors. Preferences saves desktop notification opt-in, theme and typing/idle privacy, with
+per-room mute/unmute and online/opt-out presence. Advertised DND/invisible states
+are offered; opt-in idle reports inactive focus or five minutes without app input. Notifications contain no chat text,
 respect focused rooms, inherited mutes and DND, and are rate limited. Typing expires
 using one-shot timers; outgoing typing is throttled, not polled.
 
@@ -171,9 +178,9 @@ approval; provider errors are redacted. Account creation depends on server polic
 links for browser opening. Credential-bearing and active/local schemes are rejected.
 No previews or images are fetched automatically.
 
-**Remaining:** native passkeys, arbitrary reaction picker, complete archive reaction
-counts, remote search, drag/drop and clipboard files, durable appearance/notification
-preferences, avatars and richer media viewing. The protocol defines no generic
+**Remaining:** native passkeys, complete archive reaction counts, remote search,
+avatars, richer media viewing and broader server-specific moderation commands.
+See [the integration assessment](INTEGRATION_ASSESSMENT.md) for concrete next steps. The protocol defines no generic
 remote search or room-list pagination cursor; no endpoints are invented. Room lists
 remain capped at 256. Full web parity is not claimed.
 
@@ -182,7 +189,7 @@ CPU timers in `--smoke` and `--benchmark` exist only in opt-in test modes.
 
 ## Local data and privacy
 
-Conversation menu → **Local data** enables draft/read-cursor persistence for the
+Conversation menu → **Preferences and local data** enables draft/read-cursor persistence for the
 current server/user. It is off by default. It stores draft text, reply IDs, selected
 mention IDs, read cursors and bounded attention metadata (message/log IDs and mention
 flags); never tokens, message bodies or attachments. Files
@@ -190,7 +197,9 @@ are unencrypted, private (0600, directory 0700), atomic, and keyed by a hash of 
 server/user. Location: `$XDG_STATE_HOME/apron-gpui` (default `~/.local/state/apron-gpui`).
 Limits: 256 rooms, 32,000 bytes per draft, 256 KiB draft text, 512 KiB per profile,
 16 profiles. Errors are visible; drafts over limits are not silently truncated.
-Disable erases the saved copy while retaining current drafts; Reset also clears
+Appearance/notification/privacy choices use the same bounded versioned file but
+do not enable draft storage. Disable draft storage erases saved draft/read metadata
+while retaining preferences and current drafts; Reset removes preferences and also clears
 this session's drafts and selected files. Debounced writes and reset share an
 ordered worker. Normal exit flushes; an abrupt kill can lose the latest changes.
 Concurrent app instances for the same profile are not coordinated (last writer
@@ -205,13 +214,14 @@ Image upload creates the message before transferring bytes. On failure/cancel,
 inspect the posted message before retrying; the app does not automatically repost.
 Clipboard previews are session-only and clear when switching rooms.
 
-See [MILESTONE.md](MILESTONE.md) for current validation and visual review;
+See [DAILY_WORKFLOWS.md](DAILY_WORKFLOWS.md) for current validation and visual review;
+[MILESTONE.md](MILESTONE.md) documents the preceding milestone;
 [DAILY_USE.md](DAILY_USE.md) retains the earlier daily-use implementation evidence.
 
 ## Verification
 
 All commands run from the repository root. Python scripts here are optional test
-fixtures, not application modules. To run the five integration tests, build the
+fixtures, not application modules. To run the eight integration tests, build the
 [official Apron server](https://github.com/shazow/apron) separately, then use:
 
 ```sh

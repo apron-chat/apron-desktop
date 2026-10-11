@@ -35,3 +35,12 @@ The conversation menu opens the native component/state gallery. Reviewed capture
 [minimum size](docs/milestone/minimum/report-gallery.png). Review light/dark controls,
 forms, list selection/attention, loading/disabled/error/empty/long-text states. The gallery
 is a visual regression surface, not a claim of screen-reader or IME validation.
+
+## Daily workflow forms
+
+Dialog body height follows the viewport, with fixed action footers. Preferences
+uses a storage-details disclosure so ordinary appearance/privacy controls remain
+scannable at 640×480. Caption and attachment titles are separate labeled fields;
+Rename changes the shared display title, never a local filename. File drag hover
+uses the semantic accent and only stages files. Emoji search presents a bounded
+page with explicit selection and Toggle, plus textual names and keyboard focus.

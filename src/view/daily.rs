@@ -1,6 +1,7 @@
 //! Explicit opt-in native checks against the isolated official loopback server.
 use super::*;
 use crate::smoke::{key, settle, wait};
+use gpui_kit::InputEvent as _;
 use serde_json::json;
 pub fn start(view: &Entity<Conversation>, output: String, window: &mut Window, cx: &mut App) {
     view.update(cx, |v, cx| {
@@ -65,6 +66,29 @@ async fn run(view: WeakEntity<Conversation>, output: String, cx: &mut AsyncWindo
     })
     .await;
 
+    // Search and apply a non-preset Unicode sequence through the same safe actor.
+    view.update_in(cx, |v, w, cx| v.emoji_dialog(id, w, cx))
+        .unwrap();
+    let picker = view
+        .update_in(cx, |v, _, _| {
+            v.emoji_form.as_ref().unwrap().upgrade().unwrap()
+        })
+        .unwrap();
+    cx.update(|w, cx| {
+        picker.update(cx, |f, cx| {
+            f.input.update(cx, |s, cx| s.set_value("👩‍💻", w, cx));
+            f.choose("👩‍💻", cx);
+        })
+    })
+    .unwrap();
+    stage(&output, "emoji-picker", cx).await;
+    cx.update(|w, cx| picker.update(cx, |f, cx| f.submit(w, cx)))
+        .unwrap();
+    wait(&view, cx, |v, _| {
+        v.reacting.is_none() && v.reactions.own(id, &v.you).contains("👩‍💻")
+    })
+    .await;
+    settle(cx).await;
     view.update_in(cx, |v, w, cx| v.open_mutation(id, false, w, cx))
         .unwrap();
     stage(&output, "edit", cx).await;
@@ -269,6 +293,217 @@ async fn run(view: WeakEntity<Conversation>, output: String, cx: &mut AsyncWindo
     .unwrap();
     wait(&view, cx, move |v, _| v.image_cache.contains_key(&cachekey)).await;
     stage(&output, "image-loaded", cx).await;
+    let temporary = tempfile::tempdir().unwrap();
+    let copied = temporary.path().join("copied.txt");
+    let dropped = temporary.path().join("dropped.txt");
+    std::fs::write(&copied, b"Synthetic clipboard file").unwrap();
+    std::fs::write(&dropped, b"Synthetic dropped file").unwrap();
+    clipboard(
+        format!("{}\r\n", url::Url::from_file_path(&copied).unwrap()).into_bytes(),
+        "text/uri-list",
+        cx,
+    )
+    .await;
+    view.update_in(cx, |v, w, cx| {
+        v.composer.update(cx, |s, cx| s.focus(w, cx));
+    })
+    .unwrap();
+    cx.update(|w, cx| crate::smoke::key("ctrl-v", w, cx))
+        .unwrap();
+    wait(&view, cx, |v, _| {
+        v.clipboard_task.is_none() && v.files.len() == 1
+    })
+    .await;
+    // Inject platform file-drop events through GPUI's native dispatch, not the staging method.
+    // Compositor-to-client data-offer interoperability still needs a real file manager.
+    let position = cx
+        .update(|w, _| {
+            point(
+                w.viewport_size().width / 2.,
+                w.viewport_size().height - px(64.),
+            )
+        })
+        .unwrap();
+    cx.update(|w, cx| {
+        w.dispatch_event(
+            FileDropEvent::Entered {
+                position,
+                paths: ExternalPaths(vec![dropped.clone()].into()),
+            }
+            .to_platform_input(),
+            cx,
+        );
+    })
+    .unwrap();
+    settle(cx).await;
+    stage(&output, "file-drop-hover", cx).await;
+    cx.update(|w, cx| {
+        w.dispatch_event(FileDropEvent::Submit { position }.to_platform_input(), cx);
+    })
+    .unwrap();
+    wait(&view, cx, |v, _| {
+        v.clipboard_task.is_none() && v.files.len() == 2
+    })
+    .await;
+    assert!(view.update_in(cx, |v, _, _| !v.pending).unwrap());
+    stage(&output, "file-attachments", cx).await;
+    view.update_in(cx, |v, w, cx| v.rename_attachment(1, w, cx))
+        .unwrap();
+    let rename = view
+        .update_in(cx, |v, _, _| {
+            v.title_form.as_ref().unwrap().upgrade().unwrap()
+        })
+        .unwrap();
+    cx.update(|w, cx| {
+        rename.update(cx, |f, cx| {
+            f.input.update(cx, |s, cx| s.set_value("", w, cx));
+            f.submit(w, cx);
+            assert!(!f.error.is_empty());
+        })
+    })
+    .unwrap();
+    cx.update(|w, cx| {
+        rename.update(cx, |f, cx| {
+            f.input
+                .update(cx, |s, cx| s.set_value("Shared design notes.txt", w, cx))
+        })
+    })
+    .unwrap();
+    stage(&output, "rename-attachment", cx).await;
+    cx.update(|w, cx| rename.update(cx, |f, cx| f.submit(w, cx)))
+        .unwrap();
+    assert!(dropped.exists());
+
+    // Cancellation must not append even when the bounded read has already started.
+    view.update_in(cx, |v, _, cx| {
+        v.stage_paths(vec![copied.clone()], cx);
+        v.clipboard_serial += 1;
+        v.clipboard_task = None;
+    })
+    .unwrap();
+    settle(cx).await;
+    assert_eq!(view.update_in(cx, |v, _, _| v.files.len()).unwrap(), 2);
+    view.update_in(cx, |v, _, cx| {
+        v.stage_paths(vec![temporary.path().to_owned()], cx)
+    })
+    .unwrap();
+    wait(&view, cx, |v, _| {
+        v.clipboard_task.is_none() && !v.error.is_empty()
+    })
+    .await;
+    assert_eq!(view.update_in(cx, |v, _, _| v.files.len()).unwrap(), 2);
+    stage(&output, "attachment-error", cx).await;
+    view.update_in(cx, |v, w, cx| v.send(w, cx)).unwrap();
+    wait(&view, cx, |v, _| !v.pending && v.files.is_empty()).await;
+    assert!(
+        view.update_in(cx, |v, _, _| v.rows.iter().any(|m| m.raw["body"]["embeds"]
+            .as_array()
+            .is_some_and(|es| es
+                .iter()
+                .any(|e| e["title"] == "Shared design notes.txt"))))
+            .unwrap()
+    );
+    let sent = view
+        .update_in(cx, |v, _, _| {
+            v.rows
+                .iter()
+                .find(|m| {
+                    m.raw["body"]["embeds"].as_array().is_some_and(|es| {
+                        es.iter().any(|e| e["title"] == "Shared design notes.txt")
+                    })
+                })
+                .unwrap()
+                .id
+        })
+        .unwrap();
+    wait(&view, cx, move |v, _| {
+        !v.transfer_busy
+            && v.store.get(sent).is_some_and(|m| {
+                m.raw["body"]["embeds"].as_array().is_some_and(|es| {
+                    es.len() == 2
+                        && es
+                            .iter()
+                            .all(|e| e["url"].as_str().is_some_and(|u| !u.is_empty()))
+                })
+            })
+    })
+    .await;
+    let original = view
+        .update_in(cx, |v, _, _| v.store.get(sent).unwrap().raw.clone())
+        .unwrap();
+    view.update_in(cx, |v, w, cx| v.open_mutation(sent, false, w, cx))
+        .unwrap();
+    let editor = view
+        .update_in(cx, |v, _, _| {
+            v.mutation.as_ref().unwrap().upgrade().unwrap()
+        })
+        .unwrap();
+    cx.update(|w, cx| {
+        editor.update(cx, |f, cx| {
+            f.titles[1]
+                .1
+                .update(cx, |s, cx| s.set_value("Revised shared notes.txt", w, cx))
+        })
+    })
+    .unwrap();
+    stage(&output, "edit-attachment-title", cx).await;
+    cx.update(|w, cx| editor.update(cx, |f, cx| f.submit(w, cx)))
+        .unwrap();
+    wait(&view, cx, move |v, _| {
+        v.mutation_pending.is_none()
+            && v.store
+                .get(sent)
+                .is_some_and(|m| m.raw["body"]["embeds"][1]["title"] == "Revised shared notes.txt")
+    })
+    .await;
+    view.update_in(cx, |v, _, _| {
+        let body = &v.store.get(sent).unwrap().raw["body"];
+        assert_eq!(body["text"], original["body"]["text"]);
+        for i in 0..2 {
+            assert_eq!(
+                body["embeds"][i]["url"],
+                original["body"]["embeds"][i]["url"]
+            );
+            assert_eq!(
+                body["embeds"][i]["embed_id"],
+                original["body"]["embeds"][i]["embed_id"]
+            );
+        }
+    })
+    .unwrap();
+    // Reload preferences without restoring private draft contents when storage is off.
+    view.update_in(cx, |v, w, cx| {
+        v.change_preference(local::Preference::Theme, w, cx);
+        v.change_preference(local::Preference::Notifications, w, cx);
+        v.change_preference(local::Preference::Typing, w, cx);
+        v.change_preference(local::Preference::Idle, w, cx);
+    })
+    .unwrap();
+    wait(&view, cx, |v, _| v.local_status == "Saved locally").await;
+    view.update_in(cx, |v, w, cx| {
+        v.profile = None;
+        v.notifications = false;
+        v.preferences = Default::default();
+        v.load_profile(w, cx);
+    })
+    .unwrap();
+    wait(&view, cx, |v, _| !v.local_loading).await;
+    assert!(
+        view.update_in(cx, |v, _, _| v.notifications
+            && v.preferences.dark
+            && v.preferences.suppress_typing
+            && v.preferences.report_idle
+            && !v.local_enabled)
+            .unwrap()
+    );
+    view.update_in(cx, |v, w, cx| {
+        v.last_input = std::time::Instant::now() - Duration::from_secs(301);
+        v.update_idle(w, cx);
+        assert_eq!(v.idle_reported, Some(true));
+        v.record_input(w, cx);
+        assert_eq!(v.idle_reported, Some(false));
+    })
+    .unwrap();
     view.update_in(cx, |v, w, cx| {
         v.composer
             .update(cx, |s, cx| s.set_value("Synthetic private draft", w, cx));
@@ -304,6 +539,6 @@ async fn run(view: WeakEntity<Conversation>, output: String, cx: &mut AsyncWindo
     })
     .await;
     stage(&output, "final", cx).await;
-    std::fs::write(&output,serde_json::to_vec_pretty(&json!({"passed":true,"checks":["Markdown native render","official reaction add/remove through transport actor","official server edit and delete","stale edit rejection and repeated Escape dialogs","native text clipboard paste","room identity completion and explicit mention IDs","native PNG and JPEG clipboard offers","preview without automatic send","two official uploads","explicit same-server bounded image loading","private opt-in save and ordered reset"]})).unwrap()).unwrap();
+    std::fs::write(&output,serde_json::to_vec_pretty(&json!({"passed":true,"checks":["Markdown native render","official reaction add/remove through transport actor","official server edit and delete","stale edit rejection and repeated Escape dialogs","native text clipboard paste","room identity completion and explicit mention IDs","native PNG and JPEG clipboard offers","preview without automatic send","two official uploads","explicit same-server bounded image loading","private opt-in save and ordered reset","emoji picker Unicode sequence through reconciled reaction actor","real URI-list clipboard files","platform-dispatched file drop and explicit upload","attachment cancellation and directory error preserve prior files","durable appearance/notification/privacy reload","idle threshold and return to attended","pre-send shared title validation and rename","post-send embed title change preserves URL ID and caption"]})).unwrap()).unwrap();
     cx.update(|_, cx| cx.quit()).unwrap();
 }

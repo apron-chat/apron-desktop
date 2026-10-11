@@ -89,3 +89,9 @@ pub fn gallery(window: &mut Window, cx: &mut App) {
         .child(div().text_sm().child("Long text wraps inside a surface and leaves actions reachable. Controls share toolkit keyboard, focus and disabled behavior."))
         ).footer(button("g-close").label("Close gallery").on_click(|_,w,cx|w.close_dialog(cx))));
 }
+
+pub fn dialog_body_height(window: &Window) -> Pixels {
+    (window.viewport_size().height - px(210.))
+        .max(px(160.))
+        .min(px(560.))
+}

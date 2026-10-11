@@ -2,6 +2,7 @@ pub(crate) mod daily;
 mod discover;
 mod edit;
 mod email;
+pub(crate) mod emoji;
 mod focus;
 mod images;
 mod links;
@@ -10,6 +11,7 @@ mod manage;
 mod mentions;
 mod presence;
 pub(crate) mod switcher;
+pub(crate) mod titles;
 use apron_gpui::{
     attention::Attention,
     auth::Secret,
@@ -63,6 +65,8 @@ actions!(
         ToggleMute,
         PresenceOnline,
         PresenceNone,
+        PresenceDnd,
+        PresenceInvisible,
         CreateRoom,
         CreateThread,
         RoomSettings,
@@ -70,6 +74,7 @@ actions!(
         RemoveMember,
         LeaveRoom,
         ShowMembers,
+        ChooseReaction,
         ReactLike,
         ReactHeart,
         ReactCelebrate,
@@ -86,6 +91,8 @@ pub struct Conversation {
     local_worker: apron_gpui::local_state::Worker,
     profile: Option<apron_gpui::local_state::Profile>,
     local_enabled: bool,
+    preferences: apron_gpui::local_state::Preferences,
+    preferences_saved: bool,
     local_loading: bool,
     local_epoch: u64,
     local_status: String,
@@ -102,6 +109,10 @@ pub struct Conversation {
     mutation_pending: Option<u64>,
     manage_pending: Option<u64>,
     own_status: String,
+    status_values: Vec<String>,
+    last_input: std::time::Instant,
+    idle_reported: Option<bool>,
+    idle_timer: Option<Task<()>>,
     notifications: bool,
     last_notification: Option<std::time::Instant>,
     last_typing: Option<std::time::Instant>,
@@ -121,6 +132,7 @@ pub struct Conversation {
     unread_only: bool,
     pub(crate) reactions: apron_gpui::reactions::Reactions,
     reacting: Option<u64>,
+    pub(crate) emoji_form: Option<WeakEntity<emoji::EmojiForm>>,
     pub(crate) session_form: Option<WeakEntity<crate::session::SessionForm>>,
     rooms: BTreeMap<String, Value>,
     users: BTreeMap<String, Value>,
@@ -137,6 +149,8 @@ pub struct Conversation {
     you: String,
     drafts: BTreeMap<String, (String, Option<u64>)>,
     files: Vec<Attachment>,
+    attachment_revision: u64,
+    pub(crate) title_form: Option<WeakEntity<titles::TitleForm>>,
     staged_images: BTreeMap<String, Arc<Image>>,
     image_cache: BTreeMap<String, Arc<Image>>,
     image_errors: BTreeMap<String, String>,
@@ -205,6 +219,7 @@ impl Conversation {
                 this.send(window, cx);
             }
             if matches!(event, InputEvent::Change) {
+                this.record_input(window, cx);
                 this.activity_changed(cx);
                 this.draft_revision += 1;
                 this.local_touched.insert(this.room.clone());
@@ -220,7 +235,7 @@ impl Conversation {
         });
         let quit = cx.on_app_quit(|this, cx| {
             this.local_save = None;
-            let rx = if this.local_enabled {
+            let rx = if this.local_enabled || this.preferences_saved {
                 this.profile.clone().and_then(|p| {
                     this.local_worker
                         .submit(apron_gpui::local_state::Operation::Save(
@@ -248,6 +263,7 @@ impl Conversation {
         });
         let activation = cx.observe_window_activation(window, |this, window, cx| {
             this.read_visible(window, cx);
+            this.record_input(window, cx);
         });
         let task = cx.spawn_in(window, async move |this, cx| {
             while let Ok(event) = events.recv().await {
@@ -270,6 +286,8 @@ impl Conversation {
             ),
             profile: None,
             local_enabled: false,
+            preferences: Default::default(),
+            preferences_saved: false,
             local_loading: false,
             local_epoch: 0,
             local_status: String::new(),
@@ -286,6 +304,10 @@ impl Conversation {
             mutation_pending: None,
             manage_pending: None,
             own_status: String::new(),
+            status_values: Vec::new(),
+            last_input: std::time::Instant::now(),
+            idle_reported: None,
+            idle_timer: None,
             notifications: false,
             last_notification: None,
             last_typing: None,
@@ -304,6 +326,7 @@ impl Conversation {
             unread_only: false,
             reactions: Default::default(),
             reacting: None,
+            emoji_form: None,
             filter,
             session_form: None,
             rooms: BTreeMap::new(),
@@ -321,6 +344,8 @@ impl Conversation {
             you: String::new(),
             drafts: BTreeMap::new(),
             files: Vec::new(),
+            attachment_revision: 0,
+            title_form: None,
             staged_images: BTreeMap::new(),
             image_cache: BTreeMap::new(),
             image_errors: BTreeMap::new(),
@@ -460,6 +485,7 @@ impl Conversation {
         self.draft_mentions.clear();
         self.users.clear();
         self.files.clear();
+        self.attachment_revision += 1;
         self.staged_images.clear();
         self.image_cache.clear();
         self.image_errors.clear();
@@ -545,6 +571,7 @@ impl Conversation {
         self.loading = false;
         self.pending = false;
         self.files.clear();
+        self.attachment_revision += 1;
         self.staged_images.clear();
         self.image_cache.clear();
         self.image_errors.clear();
@@ -675,6 +702,9 @@ impl Conversation {
             } => {
                 if generation == self.generation && self.reacting == Some(message) {
                     self.reacting = None;
+                    if let Some(form) = self.emoji_form.as_ref().and_then(|f| f.upgrade()) {
+                        form.update(cx, |f, cx| f.finished(result.clone(), window, cx));
+                    }
                     if let Err(e) = result {
                         self.error = e;
                     }
@@ -731,6 +761,7 @@ impl Conversation {
                 authenticated,
                 rooms,
                 caps,
+                status_values,
             } => {
                 self.authenticated = authenticated;
                 if self.you != you {
@@ -741,7 +772,10 @@ impl Conversation {
                 self.rooms.clear();
                 self.listing(&rooms);
                 self.caps = caps;
+                self.status_values = status_values;
                 self.ready = true;
+                self.idle_reported = None;
+                self.record_input(window, cx);
                 self.status = "Connected".into();
                 self.reactions = Default::default();
                 self.store = Store::default();
@@ -898,6 +932,7 @@ impl Conversation {
                 if generation == self.generation {
                     self.pending = false;
                     self.files.clear();
+                    self.attachment_revision += 1;
                     self.staged_images.clear();
                     if self.composer.read(cx).value().as_ref() == text && self.reply == reply {
                         self.composer
@@ -939,6 +974,7 @@ impl Conversation {
                 if generation == self.generation {
                     self.staged_images.clear();
                     self.files = files;
+                    self.attachment_revision += 1;
                     self.transfer = "Files ready. Review them below before sending.".into();
                 }
             }
@@ -1023,7 +1059,7 @@ impl Conversation {
                 }
                 match result {
                     Ok(Ok(Some(paths))) => {
-                        this.command(Command::ReadFiles { generation, paths }, cx);
+                        this.stage_paths(paths, cx);
                     }
                     Ok(Ok(None)) => {}
                     _ => {
@@ -1172,6 +1208,12 @@ impl Conversation {
             })
             .on_action(move |_: &CopyMessage, _, cx| {
                 cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))
+            })
+            .on_action({
+                let o = owner.clone();
+                move |_: &ChooseReaction, w, cx| {
+                    let _ = o.update(cx, |v, cx| v.emoji_dialog(id, w, cx));
+                }
             })
             .on_action(move |_: &ReactLike, _, cx| {
                 let _ = reaction_owner.update(cx, |v, cx| v.react(id, "👍", cx));
@@ -1380,6 +1422,8 @@ impl Conversation {
                         .menu("❤️  Love", Box::new(ReactHeart))
                         .menu("🎉  Celebrate", Box::new(ReactCelebrate))
                         .menu("😂  Laugh", Box::new(ReactLaugh))
+                        .separator()
+                        .menu("Choose any emoji…", Box::new(ChooseReaction))
                 })
             })
             .when(can_edit, |m| {
@@ -1663,6 +1707,8 @@ impl Conversation {
         let show_history = content_width >= window.rem_size() * 32.;
         let can_load = self.more && !self.loading && self.ready;
         let notifications = self.notifications;
+        let dnd = self.status_values.iter().any(|s| s == "dnd");
+        let invisible = self.status_values.iter().any(|s| s == "invisible");
         let muted = self.muted(&self.room);
         div()
             .h_16()
@@ -1834,6 +1880,12 @@ impl Conversation {
                                 )
                                 .menu("Presence: online", Box::new(PresenceOnline))
                                 .menu("Presence: opt out", Box::new(PresenceNone))
+                                .when(dnd, |m| {
+                                    m.menu("Presence: do not disturb", Box::new(PresenceDnd))
+                                })
+                                .when(invisible, |m| {
+                                    m.menu("Presence: invisible", Box::new(PresenceInvisible))
+                                })
                                 .menu("Local data…", Box::new(OpenPrivacy))
                                 .menu("Switch light / dark", Box::new(ToggleTheme))
                             })
@@ -1878,6 +1930,23 @@ impl Conversation {
             } else {
                 "ApronComposer"
             })
+            // GPUI 0.3.8 translates file offers after modality tracking. Restore
+            // pointer modality so a drop after typing is not rejected as keyboard hover.
+            .on_drag_move::<ExternalPaths>(|event, w, cx| {
+                if w.last_input_was_keyboard() {
+                    let handle = w.window_handle();
+                    let motion = event.event.clone();
+                    cx.defer(move |cx| {
+                        let _ = handle.update(cx, |_, w, cx| {
+                            w.dispatch_event(PlatformInput::MouseMove(motion), cx);
+                        });
+                    });
+                }
+            })
+            .on_drop(cx.listener(|v, paths: &ExternalPaths, _, cx| {
+                v.stage_paths(paths.paths().to_vec(), cx)
+            }))
+            .drag_over::<ExternalPaths>(|style, _, _, cx| style.bg(cx.theme().accent))
             .on_action(cx.listener(|v, _: &PasteImage, w, cx| v.paste_image(w, cx)))
             .on_action(cx.listener(|v, _: &MentionNext, _, cx| {
                 v.mention_index = (v.mention_index + 1) % v.mention_candidates(cx).len().max(1);
@@ -2170,6 +2239,10 @@ impl Render for Conversation {
             .child(self.compose(window, cx));
         let shell = div()
             .key_context("Apron")
+            .on_key_down(cx.listener(|v,_,w,cx|v.record_input(w,cx)))
+            .on_mouse_move(cx.listener(|v,_,w,cx|v.record_input(w,cx)))
+            .on_mouse_down(MouseButton::Left,cx.listener(|v,_,w,cx|v.record_input(w,cx)))
+            .on_scroll_wheel(cx.listener(|v,_,w,cx|v.record_input(w,cx)))
             .size_full()
             .flex()
             .items_stretch()
@@ -2179,7 +2252,7 @@ impl Render for Conversation {
             .on_action(cx.listener(|v,_:&FindMessages,w,cx|v.open_search(w,cx)))
             .on_action(cx.listener(|v,_:&NextMatch,_,cx|v.step_match(true,cx)))
             .on_action(cx.listener(|v,_:&PreviousMatch,_,cx|v.step_match(false,cx)))
-            .on_action(cx.listener(|_,_:&ToggleTheme,w,cx| {use gpui_kit::component::{Theme,ThemeMode};let mode=if cx.theme().is_dark(){ThemeMode::Light}else{ThemeMode::Dark};Theme::change(mode,Some(w),cx);crate::design::apply(cx);}))
+            .on_action(cx.listener(|v,_:&ToggleTheme,w,cx| v.change_preference(local::Preference::Theme,w,cx)))
             .on_action(cx.listener(|v,_:&CreateRoom,w,cx|v.manage_dialog(apron_gpui::workflows::Kind::Create,w,cx)))
             .on_action(cx.listener(|v,_:&CreateThread,w,cx|v.manage_dialog(apron_gpui::workflows::Kind::Thread,w,cx)))
             .on_action(cx.listener(|v,_:&RoomSettings,w,cx|v.manage_dialog(apron_gpui::workflows::Kind::Settings,w,cx)))
@@ -2187,8 +2260,10 @@ impl Render for Conversation {
             .on_action(cx.listener(|v,_:&RemoveMember,w,cx|v.manage_dialog(apron_gpui::workflows::Kind::RemoveMember,w,cx)))
             .on_action(cx.listener(|v,_:&LeaveRoom,w,cx|v.manage_dialog(apron_gpui::workflows::Kind::Leave,w,cx)))
             .on_action(cx.listener(|v,_:&ShowMembers,w,cx|v.member_dialog(w,cx)))
-            .on_action(cx.listener(|v,_:&ToggleNotifications,_,cx|{v.notifications = !v.notifications;cx.notify();}))
+            .on_action(cx.listener(|v,_:&ToggleNotifications,w,cx|v.change_preference(local::Preference::Notifications,w,cx)))
             .on_action(cx.listener(|v,_:&ToggleMute,_,cx|v.set_status(serde_json::json!({"room_id":v.room,"mute":!v.muted(&v.room)}),"status",cx)))
+            .on_action(cx.listener(|v,_:&PresenceDnd,_,cx|v.set_status(serde_json::json!({"status":"dnd"}),"me",cx)))
+            .on_action(cx.listener(|v,_:&PresenceInvisible,_,cx|v.set_status(serde_json::json!({"status":"invisible"}),"me",cx)))
             .on_action(cx.listener(|v,_:&PresenceOnline,_,cx|v.set_status(serde_json::json!({"status":"online"}),"me",cx)))
             .on_action(cx.listener(|v,_:&PresenceNone,_,cx|v.set_status(serde_json::json!({"status":""}),"me",cx)))
             .on_action(cx.listener(|_, _: &ShowGallery, w, cx| crate::design::gallery(w,cx)))

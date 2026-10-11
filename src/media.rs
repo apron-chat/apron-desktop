@@ -2,7 +2,6 @@
 use anyhow::{Result, ensure};
 use futures_util::StreamExt;
 use std::path::{Path, PathBuf};
-use tokio::io::AsyncReadExt;
 use url::Url;
 pub const LIMIT: usize = 8 * 1024 * 1024;
 #[derive(Clone, Debug)]
@@ -46,6 +45,10 @@ fn http() -> Result<reqwest::Client> {
         .build()?)
 }
 pub async fn read(paths: Vec<PathBuf>) -> Result<Vec<Attachment>> {
+    tokio::task::spawn_blocking(move || read_local(paths)).await?
+}
+pub fn read_local(paths: Vec<PathBuf>) -> Result<Vec<Attachment>> {
+    use std::{io::Read, os::unix::fs::OpenOptionsExt};
     ensure!(
         !paths.is_empty() && paths.len() <= 4,
         "Choose one to four files"
@@ -54,24 +57,19 @@ pub async fn read(paths: Vec<PathBuf>) -> Result<Vec<Attachment>> {
     let mut size = 0;
     for p in paths {
         // Reject special files before opening; re-check the opened descriptor too.
-        ensure!(
-            tokio::fs::metadata(&p).await?.is_file(),
-            "Choose regular files"
-        );
-        let mut options = tokio::fs::OpenOptions::new();
+        ensure!(std::fs::metadata(&p)?.is_file(), "Choose regular files");
+        let mut options = std::fs::OpenOptions::new();
         options.read(true);
         #[cfg(unix)]
         options.custom_flags(0x800); // Linux O_NONBLOCK: a replaced FIFO cannot hang the worker.
-        let f = options.open(&p).await?;
-        let info = f.metadata().await?;
+        let f = options.open(&p)?;
+        let info = f.metadata()?;
         ensure!(
             info.is_file() && info.len() <= LIMIT as u64,
             "File exceeds 8 MiB or is not regular"
         );
         let mut bytes = Vec::new();
-        f.take((LIMIT - size + 1) as u64)
-            .read_to_end(&mut bytes)
-            .await?;
+        f.take((LIMIT - size + 1) as u64).read_to_end(&mut bytes)?;
         size += bytes.len();
         ensure!(size <= LIMIT, "Files must total at most 8 MiB");
         let title = crate::model::clean(&p.file_name().unwrap_or_default().to_string_lossy(), 180);
@@ -166,5 +164,81 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+}
+
+/// Atomic staging: errors preserve every existing attachment. Titles are display
+/// metadata, not filesystem paths; duplicate basenames get unambiguous labels.
+pub fn append(existing: &mut Vec<Attachment>, mut incoming: Vec<Attachment>) -> Result<()> {
+    ensure!(
+        !incoming.is_empty() && existing.len() + incoming.len() <= 4,
+        "Attachments are limited to four files"
+    );
+    ensure!(
+        existing
+            .iter()
+            .chain(incoming.iter())
+            .map(|f| f.bytes.len())
+            .sum::<usize>()
+            <= LIMIT,
+        "Attachments must total at most 8 MiB"
+    );
+    let mut names: std::collections::BTreeSet<_> =
+        existing.iter().map(|f| f.title.clone()).collect();
+    for file in &mut incoming {
+        let base = crate::model::clean(&file.title, 160);
+        file.title = base.clone();
+        let mut suffix = 2;
+        while names.contains(&file.title) {
+            file.title = format!("{base} ({suffix})");
+            suffix += 1;
+        }
+        names.insert(file.title.clone());
+    }
+    existing.extend(incoming);
+    Ok(())
+}
+
+#[cfg(test)]
+mod staging_tests {
+    use super::*;
+    #[test]
+    fn append_is_atomic_bounded_and_handles_duplicate_names() {
+        let mut staged = vec![Attachment {
+            title: "same.txt".into(),
+            bytes: vec![1],
+        }];
+        append(
+            &mut staged,
+            vec![Attachment {
+                title: "same.txt".into(),
+                bytes: vec![2],
+            }],
+        )
+        .unwrap();
+        assert_eq!(staged[1].title, "same.txt (2)");
+        assert!(
+            append(
+                &mut staged,
+                vec![Attachment {
+                    title: "too-large".into(),
+                    bytes: vec![0; LIMIT]
+                }]
+            )
+            .is_err()
+        );
+        assert_eq!(staged.len(), 2);
+        assert_eq!(staged[0].bytes, [1]);
+    }
+    #[test]
+    fn local_files_are_regular_and_batch_read_failure_is_atomic() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("synthetic.txt");
+        std::fs::write(&path, b"synthetic bytes").unwrap();
+        assert_eq!(
+            read_local(vec![path.clone()]).unwrap()[0].bytes,
+            b"synthetic bytes"
+        );
+        assert!(read_local(vec![path, tmp.path().to_owned()]).is_err());
     }
 }

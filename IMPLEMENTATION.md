@@ -17,7 +17,7 @@ Tests alone never establish full protocol or web parity. Synthetic local servers
 | Secure login | Implemented; missing-helper test passed, real keyring unverified | Optional Secret Service keyring; no plaintext fallback; rotation handled; errors do not expose tokens |
 | Email/passkeys | Email fixture passed; passkeys not implemented | Match advertised server schemes; document concrete platform/provider blockers rather than approximate credentials |
 | Links/media/search | Safe link action tested; retained search/media preserved | Explicit safe link actions; bounded media; search scope honest; unsupported remote search not invented |
-| Nix/desktop/CI | Core CI passed; Nix evaluation fixed, build running | Installable package/app plus .desktop/icon; locked CI tests; distinguish evaluation/build/hardware checks |
+| Nix/desktop/CI | Baseline core and Nix CI passed; exact-head results in PR #2 | Installable package/app plus .desktop/icon; locked CI tests; distinguish evaluation/build/hardware checks |
 | Final validation | Core/official/native and final delivery smoke passed | Native wide/compact/minimum/light/dark/forms/errors/menus; regression tests; performance bounds; reviewed screenshots |
 
 Optional conversation tabs are deferred until core workflows are stable. Discord guild rails,
@@ -39,7 +39,12 @@ software require an environment that exposes them; headless tests cannot certify
 - Real Nix evaluation/build is blocked locally by the missing Nix executable. Real
   keyring round-trip is blocked by missing secret-tool/service; notification delivery,
   niri, hardware GPU, IME and screen-reader behavior need their actual desktop environment.
-- Follow-up feature work (not claimed implemented): drag/drop/clipboard files, avatars,
-  richer media viewer, arbitrary emoji picker, durable appearance/notification settings,
-  optional presence values/idle reporting and broader moderation commands. Conversation
+- Follow-up feature work (not claimed implemented): avatars, richer media viewing,
+  native passkeys and broader moderation commands. See INTEGRATION_ASSESSMENT.md. Conversation
   tabs remain an optional later design experiment.
+
+## Latest daily workflows
+
+Durable versioned preferences, explicit file drop/clipboard staging, pre-send and
+post-send attachment title edits, searchable Unicode reactions and advertised optional
+presence/opt-in idle are implemented. See DAILY_WORKFLOWS.md for verification and limits.

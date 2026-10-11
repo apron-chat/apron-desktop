@@ -15,23 +15,23 @@ a Tokio actor. No web view or browser is embedded.
 | Latest/older history | Pages of 50, bounded cache, log reconciliation, stale-response rejection |
 | Sending and replies | Implemented; local room drafts; uncertain sends never auto-resend |
 | Message edit/delete | Own-message contextual UI, stale target checks, server permission errors; no uncertain retries |
-| Reactions | Capability-gated four-choice submenu, aggregate/toggle chips, ordered replacement sets, removal and bounded history reconciliation; arbitrary picker and complete archive census deferred |
+| Reactions | Capability-gated four-choice submenu, aggregate/toggle chips, ordered replacement sets, removal and bounded history reconciliation; searchable Unicode/skin-variant picker; complete archive census deferred |
 | Selection and copy | Rendered-text selection and whole-message contextual copy |
 | Markdown and links | Native headings/lists/code/emphasis/quotes, compose preview; sanitized HTML/images, inert inline links; explicit safe HTTP(S) browser action |
 | Unread and mentions | Bounded live/fetched-history reconciliation, optional saved cursors, ID-backed autocomplete and recipient chips |
 | Read receipts | Advance-only, best-effort supported activity; focused tail auto-read |
-| Typing, presence, mutes | Expiring typing, online/opt-out presence, member presence labels and per-room mutes; optional server-specific statuses deferred |
-| Notifications | Session opt-in, body-free native notifications, focus/mute/DND gating; actual daemon delivery unverified |
-| Attachments | Explicit bounded upload/download; no redirects, same origin, no overwrite |
+| Typing, presence, mutes | Expiring typing, online/opt-out presence, member presence labels and per-room mutes; advertised DND/invisible and opt-in focus/five-minute idle |
+| Notifications | Durable opt-in, body-free native notifications, focus/mute/DND gating; actual daemon delivery unverified |
+| Attachments | Explicit bounded upload/download; staged and sent title editing; no redirects, same origin, no overwrite |
 | Images | Native clipboard raster paste, removable preview, explicit same-server embedded-image load; bounded normalization/cache |
-| Drag/drop and clipboard files | Deferred |
+| Drag/drop and clipboard files | Bounded explicit staging; real URI-list clipboard tested, platform-dispatched drop tested; actual file-manager drop still unverified |
 | Connection recovery | Heartbeat, bounded channels, backoff and explicit status/error states |
 | Conversation search | Ctrl+F, result count, Enter/F3/Shift+F3, focused match; retained current-room text only |
 | Unread room filter | All rooms / Unread, based on bounded received/fetched attention |
 | Keyboard | Send, room filter/toggle, history, mark read, menus, reply and copy |
-| Appearance | Refined opaque light/dark palette, session theme switch, grouped authors and local initials; durable appearance preferences deferred |
+| Appearance | Refined opaque light/dark palette, durable profile theme, grouped authors and local initials |
 | Persistence | Opt-in private bounded draft/reply/recipient/read files; reset controls; bounded attention metadata; tokens only in optional system keyring, history bodies/attachments never saved |
-| NixOS/niri | Pinned package/app and dev shell, desktop entry/icon; new package evaluation/build and actual niri/hardware unverified |
+| NixOS/niri | Pinned package/app and dev shell, desktop entry/icon; baseline Nix CI build passed; exact-head CI in PR #2; actual niri/hardware unverified |
 | Accessibility/IME | Widget semantics and keyboard tests; assistive software/IME unverified |
 
 Unread counts describe received/fetched evidence, not every unfetched offline

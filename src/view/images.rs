@@ -1,14 +1,133 @@
 use super::*;
 impl Conversation {
+    pub(crate) fn stage_paths(&mut self, paths: Vec<std::path::PathBuf>, cx: &mut Context<Self>) {
+        if self.pending || self.transfer_busy || self.clipboard_task.is_some() {
+            self.error = "Finish or cancel attachment preparation before adding files.".into();
+            cx.notify();
+            return;
+        }
+        if !self.caps.iter().any(|c| c == "embed:upload") || !self.joined() {
+            self.error = "Join a room on a server that supports file uploads first.".into();
+            cx.notify();
+            return;
+        }
+        if paths.is_empty()
+            || paths.len() + self.files.len() > 4
+            || paths.iter().any(|p| !p.is_absolute())
+        {
+            self.error = "Choose up to four local files in total.".into();
+            cx.notify();
+            return;
+        }
+        let generation = self.generation;
+        self.clipboard_serial += 1;
+        let serial = self.clipboard_serial;
+        self.transfer = "Preparing attachments…".into();
+        let read = cx
+            .background_executor()
+            .spawn(async move { apron_gpui::media::read_local(paths) });
+        self.clipboard_task = Some(cx.spawn(async move |this, cx| {
+            let result = read.await;
+            let _ = this.update(cx, |v, cx| {
+                if generation != v.generation || serial != v.clipboard_serial {
+                    return;
+                }
+                v.clipboard_task = None;
+                match result.and_then(|files| apron_gpui::media::append(&mut v.files, files)) {
+                    Ok(()) => {
+                        v.attachment_revision += 1;
+                        v.transfer = "Files ready · review before sending".into();
+                        v.error.clear();
+                    }
+                    Err(e) => {
+                        v.transfer.clear();
+                        v.error = format!(
+                            "Could not prepare attachments: {}",
+                            model::clean(&e.to_string(), 240)
+                        );
+                    }
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+    fn paste_file_offer(
+        &mut self,
+        text: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.clipboard_task.is_some() {
+            self.error = "Finish or cancel the current attachment preparation first.".into();
+            cx.notify();
+            return;
+        }
+        let generation = self.generation;
+        let revision = self.draft_revision;
+        let selection = self.composer.read(cx).selected_range();
+        self.clipboard_serial += 1;
+        let serial = self.clipboard_serial;
+        let request = cx.background_executor().spawn(async {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(anyhow::Error::from)?
+                .block_on(apron_gpui::clipboard::file_offer())
+        });
+        self.clipboard_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let result = request.await;
+            let _ = this.update_in(cx, |v, w, cx| {
+                if generation != v.generation || serial != v.clipboard_serial {
+                    return;
+                }
+                v.clipboard_task = None;
+                match result {
+                    Ok(Some(paths)) => v.stage_paths(paths, cx),
+                    Ok(None) => {
+                        if let Some(text) = text {
+                            if v.draft_revision == revision
+                                && v.composer.read(cx).selected_range() == selection
+                            {
+                                v.composer.update(cx, |s, cx| s.replace(text, w, cx));
+                            } else {
+                                v.error =
+                                    "The draft changed while reading the clipboard; paste again."
+                                        .into();
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        v.error = format!(
+                            "Could not paste files: {}",
+                            model::clean(&e.to_string(), 240)
+                        )
+                    }
+                }
+                cx.notify();
+            });
+        }));
+    }
     pub(crate) fn paste_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let image = cx.read_from_clipboard().and_then(|item| {
+        let clipboard = cx.read_from_clipboard();
+        if let Some(paths) = clipboard.as_ref().and_then(|item| {
+            item.entries().iter().find_map(|entry| match entry {
+                ClipboardEntry::ExternalPaths(paths) => Some(paths.paths().to_vec()),
+                _ => None,
+            })
+        }) {
+            self.stage_paths(paths, cx);
+            return;
+        }
+        let plain_text = clipboard.as_ref().and_then(|item| item.text());
+        let image = clipboard.and_then(|item| {
             item.entries().iter().find_map(|entry| match entry {
                 ClipboardEntry::Image(image) => Some(image.bytes.clone()),
                 _ => None,
             })
         });
         let Some(bytes) = image else {
-            window.dispatch_action(Box::new(gpui_kit::component::input::Paste), cx);
+            self.paste_file_offer(plain_text, window, cx);
             return;
         };
         if !self.caps.iter().any(|c| c == "embed:upload") {
@@ -57,6 +176,7 @@ impl Conversation {
                             title.clone(),
                             Arc::new(Image::from_bytes(ImageFormat::Png, raster.thumbnail)),
                         );
+                        this.attachment_revision += 1;
                         this.files.push(Attachment {
                             title,
                             bytes: raster.png,
@@ -94,7 +214,7 @@ impl Conversation {
             d = d.child(
                 crate::design::button("cancel-paste")
                     .small()
-                    .label("Cancel image preparation")
+                    .label("Cancel attachment preparation")
                     .on_click(cx.listener(|v, _, _, cx| {
                         v.clipboard_serial += 1;
                         v.clipboard_task = None;
@@ -127,6 +247,17 @@ impl Conversation {
                 );
             }
             item = item
+                .child(
+                    crate::design::button(("rename-file", ix))
+                        .ghost()
+                        .small()
+                        .label("Rename…")
+                        .accessibility_label(format!("Rename attachment {name}"))
+                        .disabled(
+                            self.pending || self.transfer_busy || self.clipboard_task.is_some(),
+                        )
+                        .on_click(cx.listener(move |v, _, w, cx| v.rename_attachment(ix, w, cx))),
+                )
                 .child(div().flex_1().min_w_0().truncate().text_sm().child(format!(
                     "{} · {} KiB",
                     name,
@@ -143,6 +274,7 @@ impl Conversation {
                         .on_click(cx.listener(move |v, _, _, cx| {
                             if let Some(pos) = v.files.iter().position(|f| f.title == name) {
                                 v.files.remove(pos);
+                                v.attachment_revision += 1;
                             }
                             v.staged_images.remove(&name);
                             cx.notify();

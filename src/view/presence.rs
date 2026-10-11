@@ -1,8 +1,58 @@
 use super::*;
 use std::time::Instant;
 impl Conversation {
+    pub(crate) fn record_input(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        self.last_input = Instant::now();
+        if self.idle_reported == Some(false) && self.idle_timer.is_some() && w.is_window_active() {
+            return;
+        }
+        self.update_idle(w, cx);
+    }
+    pub(crate) fn update_idle(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        self.idle_timer = None;
+        if !self.ready || !self.caps.iter().any(|c| c == "status") {
+            return;
+        }
+        if !self.preferences.report_idle && self.idle_reported != Some(true) {
+            self.idle_reported = None;
+            return;
+        }
+        let elapsed = self.last_input.elapsed().as_secs();
+        let desired =
+            apron_gpui::presence::idle(self.preferences.report_idle, w.is_window_active(), elapsed);
+        let idle = desired.is_some();
+        if self.idle_reported != Some(idle) {
+            let value = desired
+                .map(|s| serde_json::json!(s))
+                .unwrap_or(serde_json::json!(false));
+            self.mutation_serial += 1;
+            if self.command(
+                Command::Manage {
+                    operation: self.mutation_serial,
+                    method: "status".into(),
+                    payload: serde_json::json!({"idle":value}),
+                },
+                cx,
+            ) {
+                self.idle_reported = Some(idle);
+            }
+        }
+        if self.preferences.report_idle && w.is_window_active() && !idle {
+            self.idle_timer = Some(cx.spawn_in(w, async move |v, cx| {
+                cx.background_executor()
+                    .timer(Duration::from_secs(300 - elapsed.min(299)))
+                    .await;
+                let _ = v.update_in(cx, |v, w, cx| v.update_idle(w, cx));
+            }));
+        }
+    }
+
     pub(crate) fn activity_changed(&mut self, cx: &mut Context<Self>) {
-        if !self.ready || !self.joined() || !self.caps.iter().any(|c| c == "activity") {
+        if self.preferences.suppress_typing
+            || !self.ready
+            || !self.joined()
+            || !self.caps.iter().any(|c| c == "activity")
+        {
             return;
         }
         if self

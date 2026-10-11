@@ -117,6 +117,7 @@ pub enum Event {
         authenticated: bool,
         rooms: Value,
         caps: Vec<String>,
+        status_values: Vec<String>,
     },
     Notice(Value),
     History {
@@ -197,6 +198,7 @@ pub struct Client {
     awaiting_pong: bool,
     recovery: std::collections::VecDeque<(u64, String, u64, Option<u64>)>,
     recovery_budget: usize,
+    legacy_idle: bool,
     events: Option<async_channel::Sender<Event>>,
 }
 impl Client {
@@ -217,6 +219,7 @@ impl Client {
             awaiting_pong: false,
             recovery: Default::default(),
             recovery_budget: 0,
+            legacy_idle: false,
             events,
         };
         let hello = timeout(Duration::from_secs(15), c.receive()).await??;
@@ -306,6 +309,29 @@ impl Client {
                 anyhow::anyhow!("Connection lost during sign-in; reconnecting.")
             }
         })
+    }
+    /// Apron 8 now uses elapsed seconds. Older reference servers explicitly reject
+    /// that type; only that known rejection permits the legacy boolean form.
+    pub async fn set_idle(&mut self, seconds: Option<u64>) -> Result<Value> {
+        let value = if self.legacy_idle {
+            json!(seconds.is_some())
+        } else {
+            seconds
+                .map(|n| json!(n.min(31_536_000)))
+                .unwrap_or(json!(false))
+        };
+        match self.rpc("status", json!({"idle":value})).await {
+            Err(e)
+                if seconds.is_some()
+                    && !self.legacy_idle
+                    && e.downcast_ref::<RemoteError>()
+                        .is_some_and(|e| e.0 == "idle must be a boolean") =>
+            {
+                self.legacy_idle = true;
+                self.rpc("status", json!({"idle":true})).await
+            }
+            result => result,
+        }
     }
     /// Read a stable, bounded log interval before replacing the user's full set.
     pub async fn toggle_reaction(
@@ -596,6 +622,7 @@ async fn connected(
             authenticated,
             rooms,
             caps,
+            status_values: crate::presence::optional_statuses(&c.server),
         },
     )
     .await;
@@ -651,14 +678,25 @@ async fn handle_command(
             } else {
                 "rooms"
             };
-            let result = if !matches!(
-                method.as_str(),
-                "room_set" | "room_join" | "room_leave" | "status" | "me"
-            ) || !c.server["capabilities"]
-                .as_array()
-                .is_some_and(|v| v.iter().any(|c| c == cap))
+            let invalid_status = method == "me"
+                && payload["status"].as_str().is_some_and(|s| {
+                    !matches!(s, "online" | "")
+                        && !crate::presence::optional_statuses(&c.server)
+                            .iter()
+                            .any(|v| v == s)
+                });
+            let result = if invalid_status
+                || !matches!(
+                    method.as_str(),
+                    "room_set" | "room_join" | "room_leave" | "status" | "me"
+                )
+                || !c.server["capabilities"]
+                    .as_array()
+                    .is_some_and(|v| v.iter().any(|c| c == cap))
             {
                 Err(RemoteError("This operation is not supported by the server.".into()).into())
+            } else if method == "status" && payload.get("idle").is_some() {
+                c.set_idle(payload["idle"].as_u64()).await
             } else {
                 c.rpc(&method, payload).await
             };

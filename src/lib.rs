@@ -18,3 +18,9 @@ pub mod navigation;
 pub mod reactions;
 pub mod vault;
 pub mod workflows;
+
+pub mod emoji;
+
+pub mod presence;
+
+pub mod clipboard;

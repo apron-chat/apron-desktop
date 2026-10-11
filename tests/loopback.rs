@@ -470,3 +470,46 @@ async fn official_membership_forms_add_and_remove_another_user() {
         .is_err()
     );
 }
+
+#[tokio::test]
+#[ignore = "requires the dedicated official loopback Apron server"]
+async fn official_advertised_presence_idle_and_mute() {
+    let (events, receiver) = async_channel::bounded(128);
+    let mut client = Client::connect(OFFICIAL, Some(events)).await.unwrap();
+    client.guest().await.unwrap();
+    assert!(
+        client.server["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "status")
+    );
+    for value in apron_gpui::presence::optional_statuses(&client.server) {
+        let result = client.rpc("me", json!({"status":value})).await.unwrap();
+        assert_eq!(result["you"]["status"], value);
+    }
+    assert_eq!(
+        client.rpc("me", json!({"status":"online"})).await.unwrap()["you"]["status"],
+        "online"
+    );
+    client.set_idle(Some(300)).await.unwrap();
+    client.set_idle(None).await.unwrap();
+    client
+        .rpc("status", json!({"room_id":"general","mute":true}))
+        .await
+        .unwrap();
+    client
+        .rpc("status", json!({"room_id":"general","mute":false}))
+        .await
+        .unwrap();
+    let mut states = vec![];
+    while let Ok(event) = receiver.try_recv() {
+        if let Event::Notice(frame) = event
+            && frame["method"] == "status"
+            && frame["params"]["room_id"] == "general"
+        {
+            states.push(frame["params"]["mute"].clone());
+        }
+    }
+    assert!(states.contains(&json!(true)) && states.contains(&json!(false)));
+}

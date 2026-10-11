@@ -22,7 +22,7 @@ in platform.buildRustPackage {
     install -Dm644 data/chat.apron.GpuiExperiment.svg "$out/share/icons/hicolor/scalable/apps/chat.apron.GpuiExperiment.svg"
     wrapProgram "$out/bin/apron-gpui" \
       --prefix LD_LIBRARY_PATH : "/run/opengl-driver/lib:${pkgs.lib.makeLibraryPath libraries}" \
-      --prefix PATH : "${pkgs.lib.makeBinPath [ pkgs.libsecret pkgs.xdg-utils ]}"
+      --prefix PATH : "${pkgs.lib.makeBinPath [ pkgs.libsecret pkgs.xdg-utils pkgs.wl-clipboard ]}"
   '';
   meta = { description = "Native Wayland client for Apron"; license = pkgs.lib.licenses.mit;
     platforms = [ "x86_64-linux" "aarch64-linux" ]; mainProgram = "apron-gpui"; };

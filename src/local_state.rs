@@ -12,10 +12,24 @@ use std::{
 };
 pub const FILE_LIMIT: usize = 512 * 1024;
 pub const DRAFT_LIMIT: usize = 256 * 1024;
+/// Small, profile-scoped choices. No identifiers, text, file paths or secrets.
+#[derive(Clone, Default, Serialize, Deserialize, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Preferences {
+    pub dark: bool,
+    pub notifications: bool,
+    pub save_local: bool,
+    #[serde(default)]
+    pub report_idle: bool,
+    #[serde(default)]
+    pub suppress_typing: bool,
+}
 #[derive(Clone, Default, Serialize, Deserialize, Debug, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Snapshot {
     pub version: u8,
+    #[serde(default)]
+    pub preferences: Option<Preferences>,
     pub drafts: BTreeMap<String, (String, Option<u64>)>,
     pub reads: BTreeMap<String, u64>,
     #[serde(default)]
@@ -56,6 +70,16 @@ impl Snapshot {
             "Attention evidence exceeds limits"
         );
         ensure!(self.version == 1, "Unsupported local-state version");
+        if self.preferences.as_ref().is_some_and(|p| !p.save_local) {
+            ensure!(
+                self.drafts.is_empty()
+                    && self.reads.is_empty()
+                    && self.mentions.is_empty()
+                    && self.attention_pending.is_empty()
+                    && self.attention_evidence.is_empty(),
+                "Private profile data must be absent when storage is disabled"
+            );
+        }
         ensure!(
             self.drafts.len() <= 256 && self.reads.len() <= 256 && self.mentions.len() <= 256,
             "Too many saved rooms"
@@ -276,6 +300,64 @@ impl Worker {
 mod tests {
     use super::*;
     #[test]
+    fn durable_preferences_are_private_versioned_and_resettable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = Backend::at(tmp.path().join("state"));
+        let profile = Profile::new("wss://synthetic/ws", "synthetic-user");
+        let state = Snapshot {
+            version: 1,
+            preferences: Some(Preferences {
+                dark: true,
+                notifications: true,
+                suppress_typing: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        backend.save(&profile, &state).unwrap();
+        assert_eq!(backend.load(&profile).unwrap(), Some(state.clone()));
+        assert!(serde_json::to_vec(&state).unwrap().len() < 1024);
+        let mut invalid = state.clone();
+        invalid
+            .drafts
+            .insert("r".into(), ("private text".into(), None));
+        assert!(backend.save(&profile, &invalid).is_err());
+        invalid = state;
+        invalid.version = 2;
+        assert!(backend.save(&profile, &invalid).is_err());
+        backend.forget(&profile).unwrap();
+        assert!(backend.load(&profile).unwrap().is_none());
+    }
+    #[test]
+    fn disabling_storage_erases_queued_private_data_but_keeps_preferences() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = Backend::at(tmp.path().join("state"));
+        let profile = Profile::new("synthetic", "user");
+        let worker = Worker::start(Ok(backend.clone()));
+        let old = Snapshot {
+            version: 1,
+            drafts: BTreeMap::from([("r".into(), ("synthetic draft".into(), None))]),
+            ..Default::default()
+        };
+        let saved = worker
+            .submit(Operation::Save(profile.clone(), old))
+            .unwrap();
+        let clean = Snapshot {
+            version: 1,
+            preferences: Some(Preferences {
+                dark: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let disabled = worker
+            .submit(Operation::Save(profile.clone(), clean.clone()))
+            .unwrap();
+        saved.recv_blocking().unwrap().unwrap();
+        disabled.recv_blocking().unwrap().unwrap();
+        assert_eq!(backend.load(&profile).unwrap(), Some(clean));
+    }
+    #[test]
     fn opt_in_scoping_reset_and_privacy() {
         let tmp = tempfile::tempdir().unwrap();
         let b = Backend::at(tmp.path().join("state"));
@@ -284,6 +366,7 @@ mod tests {
         assert!(!b.root.exists());
         let s = Snapshot {
             version: 1,
+            preferences: None,
             drafts: BTreeMap::from([("r".into(), ("synthetic draft".into(), Some(3)))]),
             reads: BTreeMap::from([("r".into(), 7)]),
             mentions: BTreeMap::new(),
