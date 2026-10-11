@@ -20,7 +20,7 @@ a Tokio actor. No web view or browser is embedded.
 | Markdown and links | Native headings/lists/code/emphasis/quotes, compose preview; sanitized HTML/images, inert inline links; explicit safe HTTP(S) browser action |
 | Unread and mentions | Bounded live/fetched-history reconciliation, optional saved cursors, ID-backed autocomplete and recipient chips |
 | Read receipts | Advance-only, best-effort supported activity; focused tail auto-read |
-| Typing, presence, mutes | Expiring typing, online/opt-out presence, member presence labels and per-room mutes; advertised DND/invisible and opt-in focus/five-minute idle |
+| Typing, presence, mutes | Expiring typing, online/opt-out presence, member presence labels and nested inherited mutes; advertised DND/invisible and opt-in focus/five-minute idle; synthetic same-account/peer validation passed |
 | Notifications | Durable opt-in, body-free native notifications, focus/mute/DND gating; actual daemon delivery unverified |
 | Attachments | Explicit bounded upload/download; staged and sent title editing; no redirects, same origin, no overwrite |
 | Images | Native raster paste, thumbnails and explicit same-server full viewer with Fit/zoom/scroll/Save PNG; bounded normalization/cache |

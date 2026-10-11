@@ -589,3 +589,254 @@ async fn official_avatar_and_scoped_kick_authorization() {
         .unwrap();
     assert_eq!((raster.width, raster.height), (48, 48));
 }
+
+mod multiclient_support;
+#[tokio::test]
+#[ignore = "requires owned official loopback servers"]
+async fn official_multiclient_presence_typing_and_private_mutes() {
+    use multiclient_support::{connection, drain, expect};
+    const SERVER: &str = "ws://127.0.0.1:18767/ws";
+    let (mut a, ar, token, auth) = multiclient_support::account("presence@fixture.invalid").await;
+    let uid = text(&auth["you"]["user_id"]).to_owned();
+    let (mut sibling, sr) = connection(SERVER).await;
+    let resumed = sibling.authenticate(Some(&token)).await.unwrap();
+    assert_eq!(resumed["you"]["user_id"], uid);
+    let token = apron_gpui::auth::Secret::new(text(&resumed["token"]).to_owned()).unwrap();
+    let (mut observer, or) = connection(SERVER).await;
+    let peer = observer.guest().await.unwrap();
+    let (mut outsider, xr) = connection(SERVER).await;
+    outsider.guest().await.unwrap();
+    a.rpc("me", json!({"status":"online"})).await.unwrap();
+    for (client, rx) in [
+        (&mut a, &ar),
+        (&mut sibling, &sr),
+        (&mut observer, &or),
+        (&mut outsider, &xr),
+    ] {
+        drain(client, rx).await;
+    }
+    a.set_idle(Some(300)).await.unwrap();
+    let list = observer
+        .rpc("room_list", json!({"room_id":"general","members":true}))
+        .await
+        .unwrap();
+    assert!(
+        list["users"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|u| u["user_id"] == uid && u["status"] == "online"),
+        "Another attended connection must keep the user online"
+    );
+    sibling.set_idle(Some(300)).await.unwrap();
+    expect(&mut observer, &or, |f| {
+        f["method"] == "user"
+            && f["params"]["new"]["user_id"] == uid
+            && f["params"]["new"]["status"] == "idle"
+    })
+    .await;
+    a.set_idle(None).await.unwrap();
+    expect(&mut observer, &or, |f| {
+        f["method"] == "user"
+            && f["params"]["new"]["user_id"] == uid
+            && f["params"]["new"]["status"] == "online"
+    })
+    .await;
+    for (own, visible) in [
+        ("dnd", "dnd"),
+        ("invisible", "offline"),
+        ("", ""),
+        ("online", "online"),
+    ] {
+        a.rpc("me", json!({"status":own})).await.unwrap();
+        expect(&mut observer, &or, |f| {
+            f["method"] == "user"
+                && f["params"]["new"]["user_id"] == uid
+                && f["params"]["new"]["status"] == visible
+        })
+        .await;
+        expect(&mut sibling, &sr, |f| {
+            f["method"] == "user" && f["params"]["you"]["status"] == own
+        })
+        .await;
+    }
+    let room = a
+        .rpc(
+            "room_set",
+            json!({"title":"Synthetic activity privacy","private":true}),
+        )
+        .await
+        .unwrap();
+    let rid = text(&room["room_id"]);
+    a.rpc(
+        "room_join",
+        json!({"room_id":rid,"user_id":peer["you"]["user_id"]}),
+    )
+    .await
+    .unwrap();
+    for (client, rx) in [
+        (&mut a, &ar),
+        (&mut sibling, &sr),
+        (&mut observer, &or),
+        (&mut outsider, &xr),
+    ] {
+        drain(client, rx).await;
+    }
+    for seconds in [8, 0] {
+        a.typing(rid, seconds).await.unwrap();
+        let frame = expect(&mut observer, &or, |f| {
+            f["method"] == "activity"
+                && f["params"]["room_id"] == rid
+                && f["params"]["typing"] == seconds
+        })
+        .await;
+        assert_eq!(frame["params"]["from"]["user_id"], uid);
+        assert!(
+            !drain(&mut outsider, &xr)
+                .await
+                .iter()
+                .any(|f| f["method"] == "activity" && f["params"]["room_id"] == rid)
+        );
+    }
+    // Mutes synchronize to another connection of the same identity, never another user.
+    for scope in [rid, ""] {
+        for muted in [true, false] {
+            let mut payload = json!({"mute":muted});
+            if !scope.is_empty() {
+                payload["room_id"] = json!(scope);
+            }
+            a.rpc("status", payload).await.unwrap();
+            for (client, rx) in [(&mut a, &ar), (&mut sibling, &sr)] {
+                expect(client, rx, |f| {
+                    f["method"] == "status"
+                        && text(&f["params"]["room_id"]) == scope
+                        && f["params"]["mute"] == muted
+                })
+                .await;
+            }
+            assert!(
+                !drain(&mut observer, &or)
+                    .await
+                    .iter()
+                    .any(|f| f["method"] == "status" && f["params"].get("mute").is_some())
+            );
+            assert!(
+                !drain(&mut outsider, &xr)
+                    .await
+                    .iter()
+                    .any(|f| f["method"] == "status" && f["params"].get("mute").is_some())
+            );
+        }
+    }
+    // An active mute is restored only to a resumed connection of that account.
+    a.rpc("status", json!({"room_id":rid,"mute":true}))
+        .await
+        .unwrap();
+    let (mut reconnect, rr) = connection(SERVER).await;
+    reconnect.authenticate(Some(&token)).await.unwrap();
+    expect(&mut reconnect, &rr, |f| {
+        f["method"] == "status" && f["params"]["room_id"] == rid && f["params"]["mute"] == true
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "requires owned role server and private synthetic email log"]
+async fn official_moderator_role_grant_kick_and_membership_permissions() {
+    use apron_gpui::workflows::Kind;
+    const ROLES: &str = "ws://127.0.0.1:18767/ws";
+    let (mut moderator, _events, _token, identity) =
+        multiclient_support::account("moderator@fixture.invalid").await;
+    assert_eq!(identity["you"]["roles"], json!(["moderator"]));
+    let mid = text(&identity["you"]["user_id"]);
+    let mut owner = Client::connect(ROLES, None).await.unwrap();
+    owner.guest().await.unwrap();
+    let mut ordinary = Client::connect(ROLES, None).await.unwrap();
+    let ordinary_id = ordinary.guest().await.unwrap()["you"]["user_id"].clone();
+    let mut target = Client::connect(ROLES, None).await.unwrap();
+    let target_id = target.guest().await.unwrap()["you"]["user_id"].clone();
+    let target_id = text(&target_id);
+    // Neither guests nor account clients can self-grant roles through me.
+    assert_ne!(
+        ordinary
+            .rpc("me", json!({"roles":["moderator"]}))
+            .await
+            .unwrap()["you"]["roles"],
+        json!(["moderator"])
+    );
+    assert_eq!(
+        moderator.rpc("me", json!({"roles":[]})).await.unwrap()["you"]["roles"],
+        json!(["moderator"])
+    );
+    let room = owner
+        .rpc(
+            "room_set",
+            json!({"title":"Synthetic moderator room","private":true}),
+        )
+        .await
+        .unwrap();
+    let rid = text(&room["room_id"]);
+    // An uninvited ordinary user cannot add or remove another member of a private room.
+    for kind in [Kind::AddMember, Kind::RemoveMember] {
+        let (method, p) = kind.request(&room, "", "", target_id).unwrap();
+        assert!(ordinary.rpc(method, p).await.is_err());
+    }
+    for id in [mid, text(&ordinary_id), target_id] {
+        let (method, p) = Kind::AddMember.request(&room, "", "", id).unwrap();
+        owner.rpc(method, p).await.unwrap();
+    }
+    let (_, kick) = Kind::Kick
+        .request(&room, "", "Synthetic moderator reason", target_id)
+        .unwrap();
+    assert!(ordinary.rpc("command", kick.clone()).await.is_err());
+    let (method, remove) = Kind::RemoveMember
+        .request(&room, "", "", target_id)
+        .unwrap();
+    assert!(ordinary.rpc(method, remove.clone()).await.is_err());
+    moderator.rpc("command", kick).await.unwrap();
+    assert!(
+        target
+            .rpc(
+                "message",
+                json!({"room_id":rid,"body":{"text":"Denied after moderator kick"}})
+            )
+            .await
+            .is_err()
+    );
+    let (method, add) = Kind::AddMember.request(&room, "", "", target_id).unwrap();
+    moderator.rpc(method, add.clone()).await.unwrap();
+    target
+        .rpc(
+            "message",
+            json!({"room_id":rid,"body":{"text":"Allowed after moderator add"}}),
+        )
+        .await
+        .unwrap();
+    moderator.rpc("room_leave", remove).await.unwrap();
+    assert!(
+        target
+            .rpc(
+                "message",
+                json!({"room_id":rid,"body":{"text":"Denied after moderator membership removal"}})
+            )
+            .await
+            .is_err()
+    );
+    // Current server permits any joined member to invite: do not invent a moderator-only add policy.
+    ordinary.rpc("room_join", add).await.unwrap();
+    target
+        .rpc(
+            "message",
+            json!({"room_id":rid,"body":{"text":"Allowed after ordinary member invite"}}),
+        )
+        .await
+        .unwrap();
+    let history = owner.history(rid, None).await.unwrap();
+    assert!(
+        history["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| text(&m["body"]["text"]).contains("Synthetic moderator reason"))
+    );
+}

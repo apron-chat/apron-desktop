@@ -223,7 +223,7 @@ See [DAILY_WORKFLOWS.md](DAILY_WORKFLOWS.md) for current validation and visual r
 ## Verification
 
 All commands run from the repository root. Python scripts here are optional test
-fixtures, not application modules. To run the nine integration tests, build the
+fixtures, not application modules. To run the eleven integration tests, build the
 [official Apron server](https://github.com/shazow/apron) separately, then use:
 
 ```sh
@@ -231,8 +231,10 @@ python3 scripts/run-loopback-tests.py --aprond /absolute/path/to/aprond
 ```
 
 The runner refuses occupied test ports, starts its own in-memory server on 18766
-and fictional fixture on 18765, and cleans up only its own child processes. It
-uses temporary upload data. No GTK checkout or helper is required.
+and fictional fixture on 18765, plus a role/account server on 18767. It cleans up
+only its own child processes and uses temporary upload data. The role server uses
+the official development email log sender with fictional `.invalid` addresses,
+private temporary logs, and no SMTP or external accounts. No GTK checkout or helper is required.
 `python3 scripts/seed_reference.py` separately seeds only port 18766 for the native
 benchmark; its output supplies the synthetic room ID.
 
@@ -240,8 +242,8 @@ benchmark; its output supplies the synthetic room ID.
 ```sh
 cargo test --locked --no-default-features
 cargo build --release --locked
-# With only the dedicated synthetic fixture (18765) and official server (18766):
-cargo test --locked --no-default-features --test loopback -- --ignored --nocapture
+# Start all three isolated fixtures and run integration checks:
+python3 scripts/run-loopback-tests.py --aprond /absolute/path/to/aprond
 # Inside an isolated native Wayland test session:
 ./target/release/apron-gpui --smoke /tmp/gpui-smoke.json
 ./target/release/apron-gpui --polish-smoke /tmp/gpui-polish.json

@@ -60,8 +60,8 @@ The reference Go server remains `0670838`; protocol `3df659a` and web `e09522d`.
 - 52 core/fixture tests; nine opt-in isolated server tests.
 - Official-server creator removal, denied ordinary-member removal, private-room
   send denial after removal, shared reason notice, avatar upload and raster fetch.
-  An actual moderator-role account was not used; permission enforcement belongs
-  to the server, and that role-specific branch remains separately unverified.
+  The subsequent MULTICLIENT_VALIDATION.md milestone also tests an actual
+  locally granted moderator-role account through the official development sender.
 - Native daily suite: 22 check groups at minimum and wide sizes, including
   light/dark captures. It exercises viewer fit/zoom/Escape, cancellation and data
   release, avatar upload confirmation, no auto-load/cache before consent, explicit

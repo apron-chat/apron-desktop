@@ -554,7 +554,7 @@ impl Conversation {
         if let Some(users) = list["users"].as_array() {
             for user in users.iter().take(1024) {
                 if let Some(id) = user["user_id"].as_str().filter(|id| id.len() <= 128) {
-                    self.users.insert(id.into(),serde_json::json!({"user_id":id,"name":model::clean(user["name"].as_str().unwrap_or(id),80).replace(['\n','\t']," "), "avatar":user["avatar"].as_str().filter(|v|v.len()<=apron_gpui::visual_media::AVATAR_SOURCE_LIMIT).unwrap_or("")}));
+                    self.users.insert(id.into(),serde_json::json!({"user_id":id,"name":model::clean(user["name"].as_str().unwrap_or(id),80).replace(['\n','\t']," "), "status":model::clean(model::text(&user["status"]),40), "avatar":user["avatar"].as_str().filter(|v|v.len()<=apron_gpui::visual_media::AVATAR_SOURCE_LIMIT).unwrap_or("")}));
                 }
             }
         }

@@ -29,8 +29,109 @@ async fn clipboard(bytes: Vec<u8>, mime: &'static str, cx: &AsyncWindowContext) 
         .await;
     settle(cx).await;
 }
+async fn presence_check(view: &WeakEntity<Conversation>, cx: &mut AsyncWindowContext) {
+    eprintln!("presence: connecting peer");
+    let peer = apron_gpui::transport::Bridge::start("ws://127.0.0.1:18766/ws".into()).unwrap();
+    let uid = loop {
+        if let apron_gpui::transport::Event::Ready { you, .. } = peer.events.recv().await.unwrap() {
+            break you;
+        }
+    };
+    peer.commands
+        .try_send(Command::Manage {
+            operation: 9001,
+            method: "me".into(),
+            payload: json!({"status":"dnd"}),
+        })
+        .unwrap();
+    eprintln!("presence: peer DND notice");
+    wait(view, cx, |v, _| {
+        v.users.get(&uid).is_some_and(|u| u["status"] == "dnd")
+    })
+    .await;
+    // Reconnect must reconstruct presence from room_list, without a fresh notice.
+    eprintln!("presence: reconnect snapshot");
+    let generation = view.update_in(cx, |v, _, _| v.generation).unwrap();
+    view.update_in(cx, |v, _, cx| {
+        v.command(Command::Reconnect, cx);
+    })
+    .unwrap();
+    wait(view, cx, |v, _| {
+        v.ready && !v.loading && v.generation > generation
+    })
+    .await;
+    assert!(
+        view.update_in(cx, |v, _, _| v
+            .users
+            .get(&uid)
+            .is_some_and(|u| u["status"] == "dnd"))
+            .unwrap(),
+        "room_list must retain peer presence"
+    );
+    eprintln!("presence: typing expiry");
+    let room = view.update_in(cx, |v, _, _| v.room.clone()).unwrap();
+    peer.commands
+        .try_send(Command::Typing {
+            room: room.clone(),
+            seconds: 1,
+        })
+        .unwrap();
+    wait(view, cx, |v, _| v.typing_label().is_some()).await;
+    wait(view, cx, |v, _| v.typing_label().is_none()).await;
+    peer.commands
+        .try_send(Command::Typing {
+            room: room.clone(),
+            seconds: 8,
+        })
+        .unwrap();
+    wait(view, cx, |v, _| v.typing_label().is_some()).await;
+    peer.commands
+        .try_send(Command::Typing {
+            room: room.clone(),
+            seconds: 0,
+        })
+        .unwrap();
+    wait(view, cx, |v, _| v.typing_label().is_none()).await;
+    eprintln!("presence: mute on/off");
+    for scope in [&room, ""] {
+        view.update_in(cx, |v, _, cx| {
+            v.set_status(
+                if scope.is_empty() {
+                    json!({"mute":true})
+                } else {
+                    json!({"room_id":scope,"mute":true})
+                },
+                "status",
+                cx,
+            )
+        })
+        .unwrap();
+        wait(view, cx, |v, _| v.muted(&room)).await;
+        view.update_in(cx, |v, _, cx| {
+            v.set_status(
+                if scope.is_empty() {
+                    json!({"mute":false})
+                } else {
+                    json!({"room_id":scope,"mute":false})
+                },
+                "status",
+                cx,
+            )
+        })
+        .unwrap();
+        wait(view, cx, |v, _| !v.muted(&room)).await;
+    }
+    eprintln!("presence: timed mute");
+    view.update_in(cx, |v, _, cx| {
+        v.set_status(json!({"room_id":room,"mute":1}), "status", cx)
+    })
+    .unwrap();
+    wait(view, cx, |v, _| v.muted(&room)).await;
+    wait(view, cx, |v, _| !v.muted(&room)).await;
+}
 async fn run(view: WeakEntity<Conversation>, output: String, cx: &mut AsyncWindowContext) {
     wait(&view, cx, |v, _| v.ready && !v.loading && !v.local_loading).await;
+    presence_check(&view, cx).await;
     view.update_in(cx,|v,w,cx| { v.composer.update(cx,|s,cx|{s.set_value("## A native home for Apron\n\n**Clear text**, *thoughtful details*, and `safe code`.\n\n- Keyboard-friendly conversation\n- Explicit image loading\n\n> Fictional local test data only.",w,cx);s.focus(w,cx);});v.send(w,cx); }).unwrap();
     wait(&view, cx, |v, _| {
         !v.pending
@@ -720,6 +821,6 @@ async fn run(view: WeakEntity<Conversation>, output: String, cx: &mut AsyncWindo
     })
     .await;
     stage(&output, "final", cx).await;
-    std::fs::write(&output,serde_json::to_vec_pretty(&json!({"passed":true,"checks":["Markdown native render","official reaction add/remove through transport actor","official server edit and delete","stale edit rejection and repeated Escape dialogs","native text clipboard paste","room identity completion and explicit mention IDs","native PNG and JPEG clipboard offers","preview without automatic send","two official uploads","explicit same-server bounded image loading","private opt-in save and ordered reset","emoji picker Unicode sequence through reconciled reaction actor","real URI-list clipboard files","platform-dispatched file drop and explicit upload","attachment cancellation and directory error preserve prior files","durable appearance/notification/privacy reload","idle threshold and return to attended","pre-send shared title validation and rename","post-send embed title change preserves URL ID and caption","explicit full-size viewer fit zoom Escape cancellation and decoded-data release","confirmed avatar upload and user-controlled cached display","moderation review sends nothing and server denial preserves form"]})).unwrap()).unwrap();
+    std::fs::write(&output,serde_json::to_vec_pretty(&json!({"passed":true,"checks":["multi-client presence snapshot after reconnect, typing expiry and stop, scoped/global/timed mute", "Markdown native render","official reaction add/remove through transport actor","official server edit and delete","stale edit rejection and repeated Escape dialogs","native text clipboard paste","room identity completion and explicit mention IDs","native PNG and JPEG clipboard offers","preview without automatic send","two official uploads","explicit same-server bounded image loading","private opt-in save and ordered reset","emoji picker Unicode sequence through reconciled reaction actor","real URI-list clipboard files","platform-dispatched file drop and explicit upload","attachment cancellation and directory error preserve prior files","durable appearance/notification/privacy reload","idle threshold and return to attended","pre-send shared title validation and rename","post-send embed title change preserves URL ID and caption","explicit full-size viewer fit zoom Escape cancellation and decoded-data release","confirmed avatar upload and user-controlled cached display","moderation review sends nothing and server denial preserves form"]})).unwrap()).unwrap();
     cx.update(|_, cx| cx.quit()).unwrap();
 }

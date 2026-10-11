@@ -199,6 +199,7 @@ impl std::error::Error for AuthRequired {}
 pub struct Client {
     ws: WebSocketStream<MaybeTlsStream<TcpStream>>,
     next: u64,
+    request_prefix: String,
     pub server: Value,
     awaiting_pong: bool,
     recovery: std::collections::VecDeque<(u64, String, u64, Option<u64>)>,
@@ -217,9 +218,13 @@ impl Client {
             tokio_tungstenite::connect_async_with_config(url, Some(config), false),
         )
         .await??;
+        let mut nonce = [0u8; 16];
+        getrandom::fill(&mut nonce)
+            .map_err(|_| anyhow::anyhow!("Could not initialize request IDs"))?;
         let mut c = Self {
             ws,
             next: 0,
+            request_prefix: format!("{:032x}", u128::from_be_bytes(nonce)),
             server: Value::Null,
             awaiting_pong: false,
             recovery: Default::default(),
@@ -258,8 +263,13 @@ impl Client {
         Ok(())
     }
     pub async fn rpc(&mut self, method: &str, params: Value) -> Result<Value> {
-        self.next += 1;
-        let id = self.next.to_string();
+        self.next = self
+            .next
+            .checked_add(1)
+            .context("Request ID space exhausted")?;
+        // Apron deduplicates by user, not connection. Fresh operations after a
+        // reconnect or on a second device must never reuse another connection's IDs.
+        let id = format!("{}-{}", self.request_prefix, self.next);
         self.ws
             .send(Frame::Text(
                 json!({"id":id,"method":method,"params":params})
@@ -337,6 +347,22 @@ impl Client {
             }
             result => result,
         }
+    }
+    /// Activity is one-way: the server does not return an RPC response.
+    pub async fn typing(&mut self, room: &str, seconds: u64) -> Result<()> {
+        if self.server["capabilities"]
+            .as_array()
+            .is_some_and(|v| v.iter().any(|c| c == "activity"))
+        {
+            self.ws
+                .send(Frame::Text(
+                    json!({"method":"activity","params":{"room_id":room,"typing":seconds.min(8)}})
+                        .to_string()
+                        .into(),
+                ))
+                .await?;
+        }
+        Ok(())
     }
     /// Read a stable, bounded log interval before replacing the user's full set.
     pub async fn toggle_reaction(
@@ -685,17 +711,7 @@ async fn handle_command(
             }
         }
         Command::Typing { room, seconds } => {
-            if c.server["capabilities"]
-                .as_array()
-                .is_some_and(|v| v.iter().any(|c| c == "activity"))
-            {
-                c.ws.send(Frame::Text(
-                    json!({"method":"activity","params":{"room_id":room,"typing":seconds.min(8)}})
-                        .to_string()
-                        .into(),
-                ))
-                .await?;
-            }
+            c.typing(&room, seconds).await?;
         }
 
         Command::Manage {

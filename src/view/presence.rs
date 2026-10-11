@@ -155,16 +155,7 @@ impl Conversation {
         }
     }
     pub(crate) fn muted(&self, room: &str) -> bool {
-        let parent = self
-            .rooms
-            .get(room)
-            .and_then(|r| r["parent_room_id"].as_str())
-            .unwrap_or("");
-        ["", room, parent].iter().any(|r| {
-            self.mutes
-                .get(*r)
-                .is_some_and(|until| until.is_none_or(|end| end > Instant::now()))
-        })
+        apron_gpui::presence::muted(room, &self.rooms, &self.mutes, Instant::now())
     }
     pub(crate) fn set_status(&mut self, payload: Value, method: &str, cx: &mut Context<Self>) {
         if !self.ready || !self.caps.iter().any(|c| c == "status") {
