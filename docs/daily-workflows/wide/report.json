@@ -1,0 +1,24 @@
+{
+  "passed": true,
+  "checks": [
+    "Markdown native render",
+    "official reaction add/remove through transport actor",
+    "official server edit and delete",
+    "stale edit rejection and repeated Escape dialogs",
+    "native text clipboard paste",
+    "room identity completion and explicit mention IDs",
+    "native PNG and JPEG clipboard offers",
+    "preview without automatic send",
+    "two official uploads",
+    "explicit same-server bounded image loading",
+    "private opt-in save and ordered reset",
+    "emoji picker Unicode sequence through reconciled reaction actor",
+    "real URI-list clipboard files",
+    "platform-dispatched file drop and explicit upload",
+    "attachment cancellation and directory error preserve prior files",
+    "durable appearance/notification/privacy reload",
+    "idle threshold and return to attended",
+    "pre-send shared title validation and rename",
+    "post-send embed title change preserves URL ID and caption"
+  ]
+}

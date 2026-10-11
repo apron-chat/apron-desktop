@@ -1,0 +1,132 @@
+Compiling apron-gpui v0.1.0 (/workspace/apron-gpui)
+    Finished `test` profile [unoptimized] target(s) in 9.35s
+     Running unittests src/lib.rs (target/debug/deps/apron_gpui-be994d56a494698e)
+
+running 40 tests
+test attention::tests::dedup_mentions_reads_and_edits ... ok
+test auth::tests::secrets_are_redacted_and_bounded ... ok
+test clipboard::tests::uri_lists_are_local_bounded_and_percent_decoded ... ok
+test edit::tests::save_preserves_body_fields_and_reply_but_not_server_fields ... ok
+test edit::tests::titles_preserve_embed_identity_urls_metadata_and_caption ... ok
+test emoji::tests::names_sequences_skin_tones_and_bounds ... ok
+test attention::tests::saved_evidence_recovers_old_edit_mentions_once ... ok
+test attention::tests::restored_cursor_reconciles_offline_messages_without_repeating_read_mentions ... ok
+test links::tests::only_explicit_http_links ... ok
+test local_state::tests::durable_preferences_are_private_versioned_and_resettable ... ok
+test local_state::tests::disabling_storage_erases_queued_private_data_but_keeps_preferences ... ok
+test local_state::tests::opt_in_scoping_reset_and_privacy ... ok
+test local_state::tests::ordered_reset_cannot_resurrect_saved_state ... ok
+test media::staging_tests::append_is_atomic_bounded_and_handles_duplicate_names ... ok
+test local_state::tests::rejects_corruption_symlinks_and_bounds ... ok
+test media::staging_tests::local_files_are_regular_and_batch_read_failure_is_atomic ... ok
+test media::tests::origin_policy ... ok
+test mentions::tests::identities_are_not_guessed_and_text_alone_is_not_a_mention ... ok
+test mentions::tests::unicode_cursor_boundaries ... ok
+test media::tests::missing_and_oversized_files ... ok
+test model::room_tests::membership_deltas_use_per_identity_clocks ... ok
+test model::room_tests::room_deltas_preserve_membership_and_reject_stale_rename ... ok
+test attention::tests::memory_is_bounded ... ok
+test model::tests::splice_preserves_survivor_ids ... ok
+test model::tests::untrusted_display_has_no_html_images_controls ... ok
+test navigation::tests::unicode_and_gaps ... ok
+test presence::tests::advertised_values_and_idle_privacy ... ok
+test presence::tests::nested_mutes_expiry_and_malformed_cycles_are_bounded ... ok
+test reactions::scan_tests::unknown_empty_replacement_and_invalid_are_distinct ... ok
+test model::tests::replay_move_delete_and_bounds ... ok
+test reactions::tests::replacement_empty_duplicates_and_stale ... ok
+test vault::tests::keys_are_scoped_without_exposing_server ... ok
+test vault::tests::unavailable_has_no_fallback ... ok
+test reactions::tests::bounded_and_invalid_sets_are_not_partially_applied ... ok
+test visual_media::tests::source_policy_and_zoom_are_bounded ... ok
+test workflows::moderation_tests::kick_has_exact_scope_and_one_explicit_mention ... ok
+test workflows::tests::preserves_fixed_fields_and_uses_exact_membership_ids ... ok
+test visual_media::tests::inline_avatar_normalizes_and_shrinks ... ok
+test model::tests::byte_limit_evicts_before_count_limit_and_rejects_large_frames ... ok
+test images::tests::accepts_rasters_and_rejects_oversize_or_active_formats ... ok
+
+test result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.05s
+
+     Running tests/auth.rs (target/debug/deps/auth-83b958748628cce1)
+
+running 3 tests
+test connection_loss_during_auth_reconnects_without_exposing_input ... ok
+test rejected_token_is_redacted_and_does_not_fall_back_or_retry ... ok
+test guest_identity_resumes_with_rotated_token ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.02s
+
+     Running tests/email.rs (target/debug/deps/email-6ee87bb84f219c41)
+
+running 1 test
+test proposal_and_code_use_same_unauthenticated_connection ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/layout.rs (target/debug/deps/layout-d66d3b135f0ef694)
+
+running 1 test
+test author_runs_break_at_replies_identity_time_and_date_boundaries ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/loopback.rs (target/debug/deps/loopback-5b39cfc520426706)
+
+running 11 tests
+test actor_reports_interruption_without_resending ... ignored, requires the synthetic fixture on port 18765
+test joining_uses_membership_rpc_and_preserves_room_fields ... ignored, requires the dedicated official loopback Apron server
+test official_advertised_presence_idle_and_mute ... ignored, requires the dedicated official loopback Apron server
+test official_avatar_and_scoped_kick_authorization ... ignored, requires official synthetic loopback server
+test official_edit_delete_preserves_metadata_and_enforces_author ... ignored, requires the dedicated official loopback Apron server
+test official_history_reply_upload_and_reconnect ... ignored, requires the dedicated official loopback Apron server
+test official_membership_forms_add_and_remove_another_user ... ignored, requires the dedicated official loopback Apron server
+test official_moderator_role_grant_kick_and_membership_permissions ... ignored, requires owned role server and private synthetic email log
+test official_multiclient_presence_typing_and_private_mutes ... ignored, requires owned official loopback servers
+test official_reactions_replace_remove_and_reconcile_history ... ignored, requires official synthetic loopback server
+test official_room_forms_create_thread_edit_and_leave ... ignored, requires the dedicated official loopback Apron server
+
+test result: ok. 0 passed; 0 failed; 11 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/media.rs (target/debug/deps/media-8ba3ac2f9026bcab)
+
+running 3 tests
+test actual_file_bounds_and_no_overwrite ... ok
+test rejects_redirects_and_oversized_headers_without_forwarding_auth ... ok
+test chunked_stream_cannot_bypass_byte_limit ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/presence.rs (target/debug/deps/presence-561ba16cde38e4a4)
+
+running 1 test
+test idle_uses_elapsed_seconds_and_falls_back_only_after_explicit_type_rejection ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+     Running tests/reactions.rs (target/debug/deps/reactions-b3815ee762eb7689)
+
+running 3 tests
+test toggle_preserves_own_set_from_later_history_page ... ok
+test expired_unknown_state_never_sends_a_write ... ok
+test retention_advance_refuses_even_a_previously_observed_own_set ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+     Running tests/recovery.rs (target/debug/deps/recovery-743efb450cc9dbd6)
+
+running 1 test
+test bounded_recovery_pages_forward_and_reports_retention_gap ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/request_ids.rs (target/debug/deps/request_ids-fa90845ec977d598)
+
+running 1 test
+test fresh_operations_do_not_reuse_ids_across_same_user_connections ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+   Doc-tests apron_gpui
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

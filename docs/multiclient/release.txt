@@ -1,0 +1,2 @@
+Compiling apron-gpui v0.1.0 (/workspace/apron-gpui)
+    Finished `release` profile [optimized] target(s) in 25.61s

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Apron
+Comment=Native Apron conversations
+Exec=apron-gpui
+Icon=chat.apron.GpuiExperiment
+Terminal=false
+Categories=Network;InstantMessaging;
+StartupWMClass=chat.apron.GpuiExperiment

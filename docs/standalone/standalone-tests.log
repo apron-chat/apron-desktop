@@ -1,0 +1,59 @@
+    Finished `test` profile [unoptimized] target(s) in 0.27s
+     Running unittests src/lib.rs (target/debug/deps/apron_gpui-f9e128e59b3d16f2)
+
+running 19 tests
+test attention::tests::dedup_mentions_reads_and_edits ... ok
+test auth::tests::secrets_are_redacted_and_bounded ... ok
+test edit::tests::save_preserves_body_fields_and_reply_but_not_server_fields ... ok
+test attention::tests::restored_cursor_reconciles_offline_messages_without_repeating_read_mentions ... ok
+test local_state::tests::opt_in_scoping_reset_and_privacy ... ok
+test local_state::tests::ordered_reset_cannot_resurrect_saved_state ... ok
+test local_state::tests::rejects_corruption_symlinks_and_bounds ... ok
+test media::tests::missing_and_oversized_files ... ok
+test media::tests::origin_policy ... ok
+test mentions::tests::identities_are_not_guessed_and_text_alone_is_not_a_mention ... ok
+test mentions::tests::unicode_cursor_boundaries ... ok
+test model::room_tests::membership_deltas_use_per_identity_clocks ... ok
+test model::room_tests::room_deltas_preserve_membership_and_reject_stale_rename ... ok
+test attention::tests::memory_is_bounded ... ok
+test model::tests::splice_preserves_survivor_ids ... ok
+test model::tests::untrusted_display_has_no_html_images_controls ... ok
+test model::tests::replay_move_delete_and_bounds ... ok
+test model::tests::byte_limit_evicts_before_count_limit_and_rejects_large_frames ... ok
+test images::tests::accepts_rasters_and_rejects_oversize_or_active_formats ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s
+
+     Running tests/auth.rs (target/debug/deps/auth-1935da74b68d5f38)
+
+running 3 tests
+test connection_loss_during_auth_reconnects_without_exposing_input ... ok
+test rejected_token_is_redacted_and_does_not_fall_back_or_retry ... ok
+test guest_identity_resumes_with_rotated_token ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.02s
+
+     Running tests/loopback.rs (target/debug/deps/loopback-86d426221bb329a4)
+
+running 4 tests
+test actor_reports_interruption_without_resending ... ignored, requires the synthetic fixture on port 18765
+test joining_uses_membership_rpc_and_preserves_room_fields ... ignored, requires the dedicated official loopback Apron server
+test official_edit_delete_preserves_metadata_and_enforces_author ... ignored, requires the dedicated official loopback Apron server
+test official_history_reply_upload_and_reconnect ... ignored, requires the dedicated official loopback Apron server
+
+test result: ok. 0 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/media.rs (target/debug/deps/media-45d5799966961c98)
+
+running 3 tests
+test actual_file_bounds_and_no_overwrite ... ok
+test rejects_redirects_and_oversized_headers_without_forwarding_auth ... ok
+test chunked_stream_cannot_bypass_byte_limit ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+   Doc-tests apron_gpui
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

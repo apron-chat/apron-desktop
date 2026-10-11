@@ -1,0 +1,10 @@
+{
+  "mode": "smoke",
+  "viewport": [
+    640,
+    480
+  ],
+  "binary_sha256": "d144bb05850741bbbd15edd2bd66f04c988597d9b27e08b3e30a9d888826602c",
+  "synthetic_owned_server": true,
+  "native_exit": 0
+}

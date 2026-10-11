@@ -1,0 +1,10 @@
+{
+  "mode": "polish-smoke",
+  "viewport": [
+    640,
+    480
+  ],
+  "binary_sha256": "a142d95e05fc736fbbfe74d5f70982cbc00e6a24efa57d2e80f97ef80bf78a2b",
+  "synthetic_owned_server": true,
+  "native_exit": 0
+}

@@ -1,0 +1,16 @@
+{
+  "native_wayland": true,
+  "drag_selection": "ocal fixture note 47: m\n",
+  "clipboard_matches_trimmed_selection": true,
+  "external_wayland_clipboard": true,
+  "prepend_anchor_delta_px": 0.0,
+  "selection_survives_prepend": true,
+  "stale_response_rejected": true,
+  "rapid_room_switches": true,
+  "keyboard_reply_sent": true,
+  "escape_cancels_reply": true,
+  "keyboard_navigation_toggle": true,
+  "room_draft_restored": true,
+  "permission_denied_retains_connection_and_draft": true,
+  "interrupted_send_no_resend_and_draft_retained": true
+}

@@ -1,0 +1,10 @@
+    Finished `test` profile [unoptimized] target(s) in 0.29s
+     Running tests/loopback.rs (target/debug/deps/loopback-86d426221bb329a4)
+
+running 4 tests
+test actor_reports_interruption_without_resending ... ok
+test joining_uses_membership_rpc_and_preserves_room_fields ... ok
+test official_edit_delete_preserves_metadata_and_enforces_author ... ok
+test official_history_reply_upload_and_reconnect ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.21s

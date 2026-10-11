@@ -1,0 +1,2 @@
+dbus-daemon[10215]: [session uid=1000 pid=10215 pidfd=5] Activating service name='org.a11y.Bus' requested by ':1.1' (uid=1000 pid=10216 comm="/workspace/apron-gpui/artifacts/refined-verified-a" label="kernel")
+dbus-daemon[10215]: [session uid=1000 pid=10215 pidfd=5] Successfully activated service 'org.a11y.Bus'
