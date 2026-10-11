@@ -13,6 +13,7 @@ let
 in pkgs.stdenv.mkDerivation {
   pname = "apron-rust-toolchain"; version = "1.99.0";
   passthru.targetPlatforms = [ pkgs.stdenv.hostPlatform.system ];
+  passthru.badTargetPlatforms = [];
   dontUnpack = true; dontStrip = true;
   nativeBuildInputs = [ pkgs.autoPatchelfHook ];
   buildInputs = [ pkgs.stdenv.cc.cc.lib pkgs.zlib ];
